@@ -1,0 +1,144 @@
+import {
+  Users,
+  Settings,
+  LayoutDashboard,
+  ShoppingCart,
+  Package,
+  Truck,
+  FileText,
+  DollarSign,
+  BarChart3,
+  ShoppingBag,
+} from 'lucide-react';
+import { type NavSection, type NavItem } from '@/types/navigation';
+import { type UserRole } from '@/types/database';
+
+const ALL_ROLES: UserRole[] = [
+  'super_admin',
+  'direccion',
+  'ventas',
+  'compras',
+  'almacen',
+  'logistica',
+  'facturacion',
+  'finanzas',
+];
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  super_admin: 'Super Admin',
+  direccion: 'Dirección',
+  ventas: 'Ventas',
+  compras: 'Compras',
+  almacen: 'Almacén',
+  logistica: 'Logística',
+  facturacion: 'Facturación',
+  finanzas: 'Finanzas',
+};
+
+export const ROLE_COLORS: Record<UserRole, string> = {
+  super_admin: 'bg-red-100 text-red-800',
+  direccion: 'bg-purple-100 text-purple-800',
+  ventas: 'bg-teal-100 text-teal-800',
+  compras: 'bg-blue-100 text-blue-800',
+  almacen: 'bg-amber-100 text-amber-800',
+  logistica: 'bg-green-100 text-green-800',
+  facturacion: 'bg-indigo-100 text-indigo-800',
+  finanzas: 'bg-rose-100 text-rose-800',
+};
+
+export const NAV_SECTIONS: NavSection[] = [
+  {
+    title: 'Principal',
+    items: [
+      {
+        label: 'Dashboard',
+        href: '/dashboard',
+        icon: LayoutDashboard,
+        roles: 'all',
+      },
+    ],
+  },
+  {
+    title: 'Módulos',
+    items: [
+      {
+        label: 'Ventas',
+        href: '/dashboard/ventas',
+        icon: ShoppingCart,
+        roles: ['super_admin', 'direccion', 'ventas'],
+      },
+      {
+        label: 'Compras',
+        href: '/dashboard/compras',
+        icon: ShoppingBag,
+        roles: ['super_admin', 'direccion', 'compras'],
+      },
+      {
+        label: 'Almacén',
+        href: '/dashboard/almacen',
+        icon: Package,
+        roles: ['super_admin', 'direccion', 'almacen'],
+      },
+      {
+        label: 'Rutas',
+        href: '/dashboard/rutas',
+        icon: Truck,
+        roles: ['super_admin', 'direccion', 'logistica'],
+      },
+      {
+        label: 'Facturación',
+        href: '/dashboard/facturacion',
+        icon: FileText,
+        roles: ['super_admin', 'direccion', 'facturacion'],
+      },
+      {
+        label: 'Finanzas',
+        href: '/dashboard/finanzas',
+        icon: DollarSign,
+        roles: ['super_admin', 'direccion', 'finanzas'],
+      },
+    ],
+  },
+  {
+    title: 'Reportes',
+    items: [
+      {
+        label: 'Reportes',
+        href: '/dashboard/reportes',
+        icon: BarChart3,
+        roles: ['super_admin', 'direccion'],
+      },
+    ],
+  },
+  {
+    title: 'Administración',
+    items: [
+      {
+        label: 'Usuarios',
+        href: '/dashboard/admin/users',
+        icon: Users,
+        roles: ['super_admin'],
+      },
+      {
+        label: 'Configuración',
+        href: '/dashboard/admin/settings',
+        icon: Settings,
+        roles: ['super_admin'],
+      },
+    ],
+  },
+];
+
+export function getNavForRole(role: UserRole): NavSection[] {
+  return NAV_SECTIONS.map((section: NavSection) => ({
+    ...section,
+    items: section.items.filter(
+      (item: NavItem) => item.roles === 'all' || (item.roles as UserRole[]).includes(role)
+    ),
+  })).filter((section: NavSection) => section.items.length > 0);
+}
+
+export function hasAccess(userRole: UserRole, allowedRoles: UserRole[] | 'all'): boolean {
+  if (allowedRoles === 'all') return true;
+  return allowedRoles.includes(userRole);
+}

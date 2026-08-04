@@ -1,0 +1,11 @@
+**/node_modules
+**/.next
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.ai-agents
+contexto
+estructura_proyecto
+diseno_paginas
+*.md
