@@ -1,17 +1,26 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Mail, Lock, Loader2, AlertCircle } from 'lucide-react';
 
+const REASON_MESSAGES: Record<string, string> = {
+  inactive: 'Tu cuenta está desactivada. Contacta al administrador.',
+  no_profile: 'Tu cuenta no tiene un perfil asignado. Contacta al administrador.',
+};
+
 export function LoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const reason = searchParams.get('reason');
+  const [error, setError] = useState<string | null>(
+    reason ? (REASON_MESSAGES[reason] ?? null) : null
+  );
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const supabase = createSupabaseBrowserClient();

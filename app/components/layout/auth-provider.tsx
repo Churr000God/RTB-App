@@ -14,7 +14,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!user) {
         router.replace('/login');
       } else if (profile && !isActive) {
-        router.replace('/login');
+        // /logout cierra la sesión de verdad (un Server Component no puede
+        // escribir cookies) en vez de solo ocultar la UI y dejarla viva.
+        router.replace('/logout?reason=inactive');
       }
     }
   }, [loading, user, profile, isActive, router]);

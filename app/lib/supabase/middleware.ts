@@ -49,8 +49,12 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // If authenticated and on login page, redirect to dashboard
-  if (user && request.nextUrl.pathname === '/login') {
+  // If authenticated and on login page, redirect to dashboard — unless it's
+  // a redirect from /logout carrying a "reason" (account inactive/no
+  // profile): the message needs to reach the user before bouncing away, and
+  // getUser() can still resolve to the just-signed-out user on this same
+  // request due to token cache timing.
+  if (user && request.nextUrl.pathname === '/login' && !request.nextUrl.searchParams.has('reason')) {
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';
     return NextResponse.redirect(url);
