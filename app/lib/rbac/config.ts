@@ -9,6 +9,8 @@ import {
   DollarSign,
   BarChart3,
   ShoppingBag,
+  Building2,
+  MapPinned,
 } from 'lucide-react';
 import { type NavSection, type NavItem } from '@/types/navigation';
 import { USER_ROLES, type UserRole } from '@/types/database';
@@ -45,6 +47,23 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Dashboard',
         href: '/dashboard',
         icon: LayoutDashboard,
+        roles: 'all',
+      },
+    ],
+  },
+  {
+    title: 'Datos maestros',
+    items: [
+      {
+        label: 'Entidades',
+        href: '/dashboard/entidades',
+        icon: Building2,
+        roles: 'all',
+      },
+      {
+        label: 'Ubicaciones',
+        href: '/dashboard/ubicaciones',
+        icon: MapPinned,
         roles: 'all',
       },
     ],

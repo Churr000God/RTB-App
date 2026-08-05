@@ -1,0 +1,22 @@
+-- ==========================================
+-- RTB Sistema — 008: GRANT SELECT faltante en audit_log
+--
+-- Bug real, encontrado probando la pestaña "Auditoría" en la UI con una
+-- sesión real de super_admin (no sólo por lectura de código ni por SQL
+-- directo, que corre como postgres y no lo habría detectado). La pestaña
+-- mostraba "Sin movimientos registrados" en vez de fallar visiblemente,
+-- porque el error de PostgREST se pierde en el .then() del cliente.
+--
+-- 002_entidades_core.sql escribió la política RLS audit_log_select (SELECT
+-- para direccion/super_admin) pero nunca el GRANT SELECT subyacente sobre
+-- la tabla — sólo GRANT ALL a service_role. El privilegio de tabla se
+-- comprueba ANTES que RLS: sin el GRANT, cualquier SELECT desde
+-- `authenticated` fallaba con 42501 (permission denied), sin importar el
+-- rol ni la política. Verificado con un usuario 'compras' de prueba tras
+-- el fix: el GRANT por sí solo no basta para leer nada — RLS sigue
+-- devolviendo 0 filas para quien no es direccion/super_admin.
+--
+-- Aplicado vía MCP apply_migration sobre RTB-App (dgafffpbhktxadiqmmwl).
+-- ==========================================
+
+grant select on public.audit_log to authenticated;
