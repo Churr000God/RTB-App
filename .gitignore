@@ -11,7 +11,6 @@ app/build/
 # Variables de entorno — NUNCA subir secretos
 .env
 .env.*
-!.env.example
 !app/.env.example
 
 # Logs
@@ -27,9 +26,6 @@ yarn-error.log*
 
 # Graphify
 graphify-out/
-
-# Prisma (no se usa en este proyecto — ver AGENTS.md, módulo legado)
-app/prisma/*.db
 
 # Docker
 .docker/

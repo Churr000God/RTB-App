@@ -22,12 +22,12 @@ Para cualquier agente (Claude Code u otro) que trabaje en este repo.
 ## Módulos activos vs. legado
 
 - **Activo:** todo bajo `app/lib/supabase/`, `app/lib/rbac/`, `app/components/auth/`,
-  `app/components/layout/`, `app/app/(login|dashboard|api/admin)/`.
-- **Legado, no extender:** `app/lib/db.ts` (Prisma) y `app/prisma/schema.prisma`
-  (vacío), `next-auth` y `@next-auth/prisma-adapter` en `package.json`,
-  `app/lib/types.ts` (tipos de una app de gastos personales que no es este proyecto).
-  Se documentan en la auditoría como deuda a retirar; no construyas nada nuevo sobre
-  ellos.
+  `app/components/layout/`, `app/app/(login|dashboard|api/admin|logout)/`.
+- **Legado retirado (2026-08-04):** el ZIP de AbacusAI traía `app/lib/db.ts` (Prisma),
+  `app/prisma/schema.prisma` (vacío), `next-auth` + `@next-auth/prisma-adapter`, y
+  `app/lib/types.ts` (tipos de una app de gastos personales ajena al proyecto). Nada
+  los importaba — se eliminaron por completo (código, carpeta y dependencias en
+  `package.json`), no quedaron como deuda documentada.
 - **Docker:** `Dockerfile` y `docker-compose.yml` en la raíz del repo (no dentro de
   `app/`) — fueron reescritos, el `Dockerfile` original del ZIP no funcionaba.
 
@@ -72,9 +72,9 @@ Para cualquier agente (Claude Code u otro) que trabaje en este repo.
 
 ## MCP disponibles relevantes para este proyecto
 
-- **Supabase** — gestión directa del proyecto `RTB_Web_Desarrollo`: migraciones
-  (`apply_migration`), inspección (`list_tables`, `get_advisors`, `get_logs`), y
-  branches para probar cambios de esquema sin tocar producción.
+- **Supabase** — gestión directa del proyecto `RTB-App` (ref `dgafffpbhktxadiqmmwl`):
+  migraciones (`apply_migration`), inspección (`list_tables`, `get_advisors`,
+  `get_logs`), y branches para probar cambios de esquema sin tocar producción.
 - **n8n** — el módulo de Facturación necesita timbrado SAT vía n8n (ver
   `contexto/RTB-PRO-FAC-01_Modulo_Facturacion.md`); ahí es donde se conecta.
 - **Figma** — si se retoma el trabajo de `contexto/RTB_sistema_visual.md` y aparece

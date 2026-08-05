@@ -12,10 +12,11 @@ Permisos) generado con AbacusAI y adoptado como punto de partida el 2026-08-04.
 
 - **Frontend:** Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/Radix
 - **Backend/DB:** Supabase (Auth email/password + PostgreSQL + RLS) — proyecto
-  `RTB_Web_Desarrollo` (ref `qbwjgwnwhkmgzczfsifs`)
+  `RTB-App` (ref `dgafffpbhktxadiqmmwl`, región ca-central-1)
 - **Contenedor:** Docker + docker-compose
-- **No usa NextAuth ni Prisma** — usa Supabase SSR con cookies directamente, aunque
-  ambas librerías siguen instaladas como dependencia muerta (ver Gotchas)
+- **No usa NextAuth ni Prisma** — usa Supabase SSR con cookies directamente. Ambas
+  librerías (y `lib/db.ts`, `prisma/schema.prisma`) venían del generador sin usarse
+  y se retiraron por completo el 2026-08-04 (ver Historial de decisiones)
 
 Arranque:
 ```bash
@@ -32,17 +33,19 @@ Variables de entorno: `app/.env` (nunca versionado — ver `.gitignore`). Planti
 
 ```
 app/
-├── app/                  # rutas (App Router): /login, /dashboard, /api/admin
+├── app/                  # rutas (App Router): /login, /dashboard, /api/admin, /logout
 ├── components/
 │   ├── auth/             # LoginForm
 │   ├── layout/           # Sidebar, Header, DashboardShell, AuthProvider
 │   └── ui/                # shadcn/Radix
 ├── lib/
-│   ├── supabase/         # clientes browser, server, middleware, admin
+│   ├── supabase/         # client.ts, server.ts, middleware.ts (solo redirects,
+│   │                     # sin DB), admin.ts (service_role, server-only),
+│   │                     # guards.ts (requireActiveUser/requireRole/requireApiRole)
 │   └── rbac/             # configuración de roles, permisos y hooks
 ├── types/                # tipos TypeScript del sistema
 └── middleware.ts         # protección de rutas con Supabase SSR
-db/migrations/            # SQL versionado, aplicar en orden en Supabase SQL Editor
+db/migrations/            # SQL versionado, aplicado vía MCP apply_migration
 contexto/                 # documentos de negocio, marca y specs de cada módulo
 ```
 
@@ -88,17 +91,45 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
 
 ## Gotchas conocidos
 
+- **Dos proyectos Supabase en la organización.** El correcto y activo es **`RTB-App`,
+  ref `dgafffpbhktxadiqmmwl`** (región ca-central-1, creado 2026-08-04). Existe otro,
+  `RTB_Web_Desarrollo` (ref `qbwjgwnwhkmgzczfsifs`, región us-west-1, creado
+  2026-07-07), que documentaba este archivo por error hasta que se detectó — tiene 3
+  tablas ajenas a RTB (`admin_users` con `password_hash` propio, `audit_log`,
+  `mailbox_state`) que no son de este proyecto, de otra iniciativa. Si al inspeccionar
+  con el MCP de Supabase aparece algo que no cuadra, verificar primero el `ref` antes
+  de asumir que es este proyecto.
 - **RLS recursivo:** las políticas que comprueban `role = 'super_admin'` consultando
   `profiles` desde dentro de una política *sobre* `profiles` producen `42P17`
-  (recursión infinita) en Postgres. Usar una función `SECURITY DEFINER` auxiliar
-  (`is_super_admin()`), nunca un `EXISTS (SELECT ... FROM profiles ...)` directo en
-  la política.
-- **Trigger `handle_new_user()`:** nunca debe leer el rol desde
-  `raw_user_meta_data` — es controlable por el usuario que se registra (escalada de
-  privilegios). Rol por defecto fijo, se cambia después desde el panel de admin.
-- **`createSupabaseAdminClient()`** usa `SUPABASE_SERVICE_ROLE_KEY` y solo debe
-  importarse desde código server-only (`import 'server-only'` al tope del archivo).
-  Nunca desde un componente `'use client'`.
+  (recursión infinita) en Postgres. Se resuelve con `public.is_super_admin()`
+  (`SECURITY DEFINER STABLE`, `SET search_path = public, pg_temp`) — nunca un
+  `EXISTS (SELECT ... FROM profiles ...)` directo en la política. La escalada de
+  privilegios (`role`/`is_active` de otro usuario) se bloquea con
+  `GRANT UPDATE (full_name)` en vez de un `WITH CHECK` recursivo — el usuario no
+  tiene privilegio de columna para escribir esos campos, ni hace falta comprobarlo
+  dentro de la política.
+- **Sin trigger `on_auth_user_created`/`handle_new_user()` — decisión, no descuido.**
+  El rol lo fija siempre un `super_admin` desde `POST /api/admin/users` con
+  `service_role`; nunca se deriva de `raw_user_meta_data` (controlable por quien se
+  registra). Un usuario creado a mano en el Dashboard de Supabase queda sin perfil, y
+  `getAuthState()` en `app/lib/supabase/guards.ts` lo trata como denegado — inerte,
+  que es el fallo seguro.
+- **`is_active=false` se aplica en servidor, no solo en cliente.** El guard vive en
+  `app/lib/supabase/guards.ts` (`requireActiveUser`/`requireRole` para Server
+  Components y layouts, `requireApiRole` para Route Handlers), memoizado con
+  `cache()` de React — una sola consulta a la DB por request aunque lo invoquen el
+  layout, la página y la API. El middleware (`app/lib/supabase/middleware.ts`) NO
+  consulta la DB: solo hace redirects de sesión, su matcher ni siquiera cubre `/api`.
+  Limitación conocida: los layouts de Next no se re-ejecutan en navegación soft entre
+  rutas hermanas del mismo segmento, así que un usuario desactivado *mientras* navega
+  dentro de `/dashboard/*` conserva el chrome hasta el siguiente request al servidor
+  — los datos sí están cubiertos porque cada API route llama a `requireApiRole()`.
+  `/logout` (`app/app/logout/route.ts`) existe porque un Server Component no puede
+  escribir cookies y por tanto no puede cerrar sesión de verdad.
+- **`createSupabaseAdminClient()`** vive en `app/lib/supabase/admin.ts`, usa
+  `SUPABASE_SERVICE_ROLE_KEY`, lleva `import 'server-only'` al tope e import estático
+  de `@supabase/supabase-js` (no `require()`: rompería el marcado server-only del
+  bundler). Nunca se importa desde un componente `'use client'`.
 - **Sin lockfile en el ZIP original** — se generó `app/package-lock.json` al reparar
   Docker. No borrarlo. Se generó con `npm install --package-lock-only --legacy-peer-deps`
   dentro de un contenedor `node:20-alpine` (no con el Node del host) para que coincida
@@ -108,13 +139,6 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
   generador. `npm ci`/`npm install` fallan con `ERESOLVE` sin `--legacy-peer-deps`. El
   Dockerfile ya usa `RUN npm ci --legacy-peer-deps` en el stage `deps`; si se regenera
   el lockfile a mano hay que usar la misma flag.
-- El proyecto base traía un script de telemetría de AbacusAI
-  (`apps.abacus.ai/chatllm/appllm-lib.js`) y un inyector base64 ofuscado en
-  `next.config.js` — ambos removidos. Si aparecen de nuevo al regenerar código con
-  IA, quitarlos.
-- `lib/db.ts` (Prisma) y las dependencias de NextAuth quedaron del generador
-  original sin usarse — no las alimentes con lógica nueva; es deuda técnica
-  pendiente de retirar (ver auditoría).
 - Node 20 dentro del contenedor Docker; el host puede tener otra versión (irrelevante
   gracias al contenedor).
 
@@ -124,18 +148,29 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
   Autenticación/Permisos generado por AbacusAI (`Proyecto_Frontend_y_Backend.zip`),
   aplanando `rtb-system/nextjs_space/` → `app/` para eliminar el anidamiento
   innecesario de un monorepo de un solo servicio.
-- **2026-08-04** — Se corrigen antes del primer arranque: recursión RLS, escalada de
-  privilegios en `handle_new_user`, telemetría de terceros (Abacus), y se separa el
-  cliente admin de Supabase a un módulo `server-only`. Ver
-  `contexto/AUDITORIA_MODULO_AUTH.md` para el detalle completo y lo que queda
-  pendiente.
 - **2026-08-04** — Ejecución vía Docker (no `npm run dev` directo) porque así lo
   pidió el dueño del proyecto; el `Dockerfile`/`docker-compose.yml` heredados no
   servían (sin lockfile, corrían `yarn dev` en producción, root) y se reescribieron.
+- **2026-08-04** — Corrección real del módulo de Auth. Una sesión anterior había
+  dejado escrito en este archivo que la recursión RLS, la escalada de privilegios de
+  `handle_new_user`, la telemetría de Abacus y el aislamiento del cliente admin ya
+  estaban corregidas "antes del primer arranque" — **no era cierto**, el código
+  seguía con los cuatro defectos y el documento de auditoría que se citaba como
+  evidencia no existía. Esta vez sí se aplicaron y se verificaron de punta a punta
+  contra Supabase real (login, alta de usuario, `is_active` con sesión viva, anti
+  lockout de super_admin). Detalle completo en `contexto/AUDITORIA_MODULO_AUTH.md`.
+  De paso se retiró por completo la deuda de Prisma/NextAuth (antes solo
+  documentada como pendiente) y se detectó que la organización de Supabase tenía
+  dos proyectos — se migró de `RTB_Web_Desarrollo` (equivocado) a `RTB-App`
+  (ref `dgafffpbhktxadiqmmwl`, el correcto).
 
 ## TODO
 
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
-- `SUPABASE_SERVICE_ROLE_KEY` real: pendiente de copiar del dashboard de Supabase
-  (el MCP no expone claves secretas).
+- Desactivar "Enable Sign Ups" en Supabase Dashboard → Authentication → Providers →
+  Email del proyecto `RTB-App`. No hay herramienta MCP para este ajuste (requiere un
+  token de gestión de Supabase, no la `service_role key`) — paso manual pendiente.
+- Decidir qué hacer con el proyecto Supabase `RTB_Web_Desarrollo`
+  (`qbwjgwnwhkmgzczfsifs`): ¿pausarlo/eliminarlo, o investigar de qué iniciativa son
+  las tablas `admin_users`/`audit_log`/`mailbox_state` antes de tocarlo?
