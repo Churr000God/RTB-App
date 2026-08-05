@@ -1,3 +1,5 @@
+import 'server-only';
+
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
@@ -26,20 +28,6 @@ export function createSupabaseServerClient() {
             // Ignore errors in Server Components
           }
         },
-      },
-    }
-  );
-}
-
-export function createSupabaseAdminClient() {
-  const { createClient } = require('@supabase/supabase-js');
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
       },
     }
   );
