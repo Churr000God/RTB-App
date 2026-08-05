@@ -91,14 +91,11 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
 
 ## Gotchas conocidos
 
-- **Dos proyectos Supabase en la organización.** El correcto y activo es **`RTB-App`,
-  ref `dgafffpbhktxadiqmmwl`** (región ca-central-1, creado 2026-08-04). Existe otro,
-  `RTB_Web_Desarrollo` (ref `qbwjgwnwhkmgzczfsifs`, región us-west-1, creado
-  2026-07-07), que documentaba este archivo por error hasta que se detectó — tiene 3
-  tablas ajenas a RTB (`admin_users` con `password_hash` propio, `audit_log`,
-  `mailbox_state`) que no son de este proyecto, de otra iniciativa. Si al inspeccionar
-  con el MCP de Supabase aparece algo que no cuadra, verificar primero el `ref` antes
-  de asumir que es este proyecto.
+- **Verificar siempre el `ref` del proyecto Supabase.** La organización tiene más de
+  un proyecto; el de RTB es **`RTB-App`, ref `dgafffpbhktxadiqmmwl`** (región
+  ca-central-1). Si al inspeccionar con el MCP de Supabase aparece una tabla o
+  configuración que no cuadra con lo documentado aquí, verificar primero el `ref`
+  antes de asumir que es este proyecto — ya pasó una vez.
 - **RLS recursivo:** las políticas que comprueban `role = 'super_admin'` consultando
   `profiles` desde dentro de una política *sobre* `profiles` producen `42P17`
   (recursión infinita) en Postgres. Se resuelve con `public.is_super_admin()`
@@ -160,9 +157,8 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
   contra Supabase real (login, alta de usuario, `is_active` con sesión viva, anti
   lockout de super_admin). Detalle completo en `contexto/AUDITORIA_MODULO_AUTH.md`.
   De paso se retiró por completo la deuda de Prisma/NextAuth (antes solo
-  documentada como pendiente) y se detectó que la organización de Supabase tenía
-  dos proyectos — se migró de `RTB_Web_Desarrollo` (equivocado) a `RTB-App`
-  (ref `dgafffpbhktxadiqmmwl`, el correcto).
+  documentada como pendiente) y se confirmó el proyecto Supabase correcto de RTB:
+  `RTB-App` (ref `dgafffpbhktxadiqmmwl`).
 
 ## TODO
 
@@ -171,6 +167,3 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
 - Desactivar "Enable Sign Ups" en Supabase Dashboard → Authentication → Providers →
   Email del proyecto `RTB-App`. No hay herramienta MCP para este ajuste (requiere un
   token de gestión de Supabase, no la `service_role key`) — paso manual pendiente.
-- Decidir qué hacer con el proyecto Supabase `RTB_Web_Desarrollo`
-  (`qbwjgwnwhkmgzczfsifs`): ¿pausarlo/eliminarlo, o investigar de qué iniciativa son
-  las tablas `admin_users`/`audit_log`/`mailbox_state` antes de tocarlo?

@@ -110,9 +110,6 @@ Verificado: intentar auto-desactivarse devuelve 400 con mensaje explicativo.
 
 - Desactivar "Enable Sign Ups" en el dashboard de Supabase (Authentication →
   Providers → Email) — no hay herramienta MCP para este ajuste.
-- El proyecto Supabase `RTB_Web_Desarrollo` (ref `qbwjgwnwhkmgzczfsifs`) tiene tres
-  tablas ajenas a RTB (`admin_users`, `audit_log`, `mailbox_state`) de otra
-  iniciativa — sin decisión tomada sobre qué hacer con ese proyecto.
 - Sin endpoint `DELETE` para usuarios (decisión deliberada): el borrado duro
   destruiría historial en cuanto los módulos de Ventas/Compras referencien
   `profiles(id)`. Desactivar ya impide operar por completo.
