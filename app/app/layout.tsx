@@ -38,9 +38,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <head>
-        <script src="https://apps.abacus.ai/chatllm/appllm-lib.js" />
-      </head>
       <body
         className={`${inter.variable} ${playfair.variable} font-sans antialiased`}
       >
