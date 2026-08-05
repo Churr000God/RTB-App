@@ -1,12 +1,15 @@
-export type UserRole =
-  | 'super_admin'
-  | 'direccion'
-  | 'ventas'
-  | 'compras'
-  | 'almacen'
-  | 'logistica'
-  | 'facturacion'
-  | 'finanzas';
+export const USER_ROLES = [
+  'super_admin',
+  'direccion',
+  'ventas',
+  'compras',
+  'almacen',
+  'logistica',
+  'facturacion',
+  'finanzas',
+] as const;
+
+export type UserRole = (typeof USER_ROLES)[number];
 
 export interface Profile {
   id: string;

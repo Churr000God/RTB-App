@@ -1,121 +1,112 @@
 export const dynamic = 'force-dynamic';
 
-import { createSupabaseServerClient, createSupabaseAdminClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { requireApiRole } from '@/lib/supabase/guards';
+import { USER_ROLES } from '@/types/database';
 
-// GET - list all profiles (super_admin only)
+const createUserSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Correo electrónico inválido'),
+  password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres'),
+  full_name: z.string().trim().min(3, 'El nombre completo es obligatorio').max(120),
+  role: z.enum(USER_ROLES, { errorMap: () => ({ message: 'Rol inválido' }) }),
+});
+
+/** listUsers() pagina de 50 en 50 por defecto: hay que recorrerlo entero. */
+async function fetchEmailMap(admin: ReturnType<typeof createSupabaseAdminClient>) {
+  const emails = new Map<string, string>();
+  const perPage = 1000;
+
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+
+    const users = data?.users ?? [];
+    users.forEach((u) => emails.set(u.id, u.email ?? ''));
+    if (users.length < perPage) break;
+  }
+
+  return emails;
+}
+
+// GET - listado (super_admin activo)
 export async function GET() {
   try {
+    const { response } = await requireApiRole(['super_admin']);
+    if (response) return response;
+
+    // Cliente de usuario a propósito: la lectura pasa por RLS (is_super_admin()).
     const supabase = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
-    }
-
-    // Check role
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profile?.role !== 'super_admin') {
-      return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-    }
-
-    // Get all profiles
     const { data: profiles, error } = await supabase
       .from('profiles')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      return NextResponse.json({ error: error?.message }, { status: 500 });
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Get emails from auth.users via admin client
-    const adminClient = createSupabaseAdminClient();
-    const { data: authUsers } = await adminClient.auth.admin.listUsers();
-    const emailMap: Record<string, string> = {};
-    (authUsers?.users ?? []).forEach((u: any) => {
-      emailMap[u?.id ?? ''] = u?.email ?? '';
-    });
+    const emails = await fetchEmailMap(createSupabaseAdminClient());
 
-    const enriched = (profiles ?? []).map((p: any) => ({
-      ...(p ?? {}),
-      email: emailMap[p?.id ?? ''] ?? '',
-    }));
-
-    return NextResponse.json(enriched);
+    return NextResponse.json(
+      (profiles ?? []).map((p: any) => ({ ...p, email: emails.get(p.id) ?? '' }))
+    );
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }
 }
 
-// POST - create new user (super_admin only)
+// POST - alta (super_admin activo)
 export async function POST(request: Request) {
   try {
-    const supabase = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { response } = await requireApiRole(['super_admin']);
+    if (response) return response;
 
-    if (!user) {
-      return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+    const parsed = createUserSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? 'Datos inválidos' },
+        { status: 400 }
+      );
     }
+    const { email, password, full_name, role } = parsed.data;
 
-    const { data: adminProfile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
+    const admin = createSupabaseAdminClient();
 
-    if (adminProfile?.role !== 'super_admin') {
-      return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
-    }
-
-    const body = await request.json();
-    const { email, password, full_name, role } = body ?? {};
-
-    if (!email || !password || !full_name || !role) {
-      return NextResponse.json({ error: 'Todos los campos son obligatorios' }, { status: 400 });
-    }
-
-    const validRoles = ['super_admin', 'direccion', 'ventas', 'compras', 'almacen', 'logistica', 'facturacion', 'finanzas'];
-    if (!validRoles.includes(role)) {
-      return NextResponse.json({ error: 'Rol inválido' }, { status: 400 });
-    }
-
-    // Create user in Supabase Auth via admin
-    const adminClient = createSupabaseAdminClient();
-    const { data: newAuthUser, error: authError } = await adminClient.auth.admin.createUser({
+    const { data: created, error: authError } = await admin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
     });
 
-    if (authError) {
-      return NextResponse.json({ error: authError?.message ?? 'Error al crear usuario' }, { status: 400 });
+    if (authError || !created?.user) {
+      const duplicate = /already (been )?registered|already exists/i.test(authError?.message ?? '');
+      return NextResponse.json(
+        {
+          error: duplicate
+            ? 'Ya existe un usuario con ese correo.'
+            : authError?.message ?? 'Error al crear usuario',
+        },
+        { status: 400 }
+      );
     }
 
-    // Create profile
-    const { error: profileError } = await supabase.from('profiles').insert({
-      id: newAuthUser?.user?.id,
-      full_name,
-      role,
-      is_active: true,
-    });
+    // Única creación del perfil: no existe trigger on_auth_user_created (ver
+    // migración 001). Va con el cliente admin porque `authenticated` no tiene
+    // GRANT INSERT sobre profiles.
+    const { error: profileError } = await admin
+      .from('profiles')
+      .insert({ id: created.user.id, full_name, role, is_active: true });
 
     if (profileError) {
-      // Rollback auth user
-      await adminClient.auth.admin.deleteUser(newAuthUser?.user?.id ?? '');
-      return NextResponse.json({ error: profileError?.message ?? 'Error al crear perfil' }, { status: 400 });
+      await admin.auth.admin.deleteUser(created.user.id); // rollback
+      return NextResponse.json(
+        { error: 'No se pudo crear el perfil; la operación fue revertida.' },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ success: true, id: newAuthUser?.user?.id });
+    return NextResponse.json({ success: true, id: created.user.id }, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

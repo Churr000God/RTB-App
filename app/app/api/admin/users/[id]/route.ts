@@ -1,60 +1,89 @@
 export const dynamic = 'force-dynamic';
 
-import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { requireApiRole } from '@/lib/supabase/guards';
+import { USER_ROLES } from '@/types/database';
 
-// PATCH - update user profile (super_admin only)
-export async function PATCH(
-  request: Request,
-  { params }: { params: { id: string } }
-) {
+const updateSchema = z
+  .object({
+    full_name: z.string().trim().min(3, 'El nombre completo es obligatorio').max(120).optional(),
+    role: z.enum(USER_ROLES, { errorMap: () => ({ message: 'Rol inválido' }) }).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada que actualizar' });
+
+type Admin = ReturnType<typeof createSupabaseAdminClient>;
+
+/** ¿Queda algún otro super_admin activo si tocamos a `targetId`? */
+async function otherActiveSuperAdmins(admin: Admin, targetId: string) {
+  const { count } = await admin
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('role', 'super_admin')
+    .eq('is_active', true)
+    .neq('id', targetId);
+
+  return count ?? 0;
+}
+
+// PATCH - editar perfil (super_admin activo)
+export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   try {
-    const supabase = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { auth, response } = await requireApiRole(['super_admin']);
+    if (response) return response;
 
-    if (!user) {
-      return NextResponse.json({ error: 'No autenticado' }, { status: 401 });
+    const parsed = updateSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? 'Datos inválidos' },
+        { status: 400 }
+      );
     }
+    const updates = parsed.data;
 
-    const { data: adminProfile } = await supabase
+    const targetId = params?.id ?? '';
+    const admin = createSupabaseAdminClient();
+
+    const { data: target } = await admin
       .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
+      .select('id, role, is_active')
+      .eq('id', targetId)
+      .maybeSingle();
 
-    if (adminProfile?.role !== 'super_admin') {
-      return NextResponse.json({ error: 'Sin permisos' }, { status: 403 });
+    if (!target) {
+      return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 });
     }
 
-    const body = await request.json();
-    const updates: Record<string, any> = {};
+    const demoting =
+      updates.role !== undefined && updates.role !== 'super_admin' && target.role === 'super_admin';
+    const deactivating = updates.is_active === false && target.is_active === true;
 
-    if (body?.full_name !== undefined) updates.full_name = body.full_name;
-    if (body?.role !== undefined) {
-      const validRoles = ['super_admin', 'direccion', 'ventas', 'compras', 'almacen', 'logistica', 'facturacion', 'finanzas'];
-      if (!validRoles.includes(body.role)) {
-        return NextResponse.json({ error: 'Rol inválido' }, { status: 400 });
+    // 1) Nadie se degrada ni se desactiva a sí mismo.
+    if (targetId === auth.userId && (demoting || deactivating)) {
+      return NextResponse.json(
+        {
+          error:
+            'No puedes cambiar tu propio rol de super_admin ni desactivar tu propia cuenta. Pídeselo a otro super_admin.',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 2) Siempre debe quedar al menos un super_admin activo.
+    if (demoting || deactivating) {
+      if ((await otherActiveSuperAdmins(admin, targetId)) === 0) {
+        return NextResponse.json(
+          { error: 'Debe existir al menos un super_admin activo en el sistema.' },
+          { status: 409 }
+        );
       }
-      updates.role = body.role;
-    }
-    if (body?.is_active !== undefined) updates.is_active = body.is_active;
-
-    if (Object.keys(updates).length === 0) {
-      return NextResponse.json({ error: 'Nada que actualizar' }, { status: 400 });
     }
 
-    updates.updated_at = new Date().toISOString();
-
-    const { error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', params?.id ?? '');
-
-    if (error) {
-      return NextResponse.json({ error: error?.message ?? 'Error al actualizar' }, { status: 500 });
-    }
+    // updated_at lo pone el trigger set_updated_at.
+    const { error } = await admin.from('profiles').update(updates).eq('id', targetId);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

@@ -29,13 +29,14 @@ interface UserWithEmail extends Profile {
 type ModalMode = 'create' | 'edit' | null;
 
 export default function AdminUsersPage() {
-  const { role } = useAuth();
+  const { user, role } = useAuth();
   const router = useRouter();
   const [users, setUsers] = useState<UserWithEmail[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterRole, setFilterRole] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [listError, setListError] = useState<string | null>(null);
 
   // Modal state
   const [modalMode, setModalMode] = useState<ModalMode>(null);
@@ -153,11 +154,22 @@ export default function AdminUsersPage() {
   };
 
   const toggleActive = async (u: UserWithEmail) => {
-    await fetch(`/api/admin/users/${u?.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_active: !u?.is_active }),
-    });
+    setListError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${u?.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !u?.is_active }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setListError(data?.error ?? 'Error al actualizar el estado');
+        return;
+      }
+    } catch {
+      setListError('Error de conexión');
+      return;
+    }
     await fetchUsers();
   };
 
@@ -179,6 +191,13 @@ export default function AdminUsersPage() {
           <UserPlus className="w-4 h-4 mr-2" /> Nuevo Usuario
         </Button>
       </div>
+
+      {listError && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{listError}</span>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-xl p-4 flex flex-wrap items-center gap-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
@@ -263,8 +282,15 @@ export default function AdminUsersPage() {
                         variant="ghost"
                         size="sm"
                         onClick={() => toggleActive(u)}
+                        disabled={u?.id === user?.id}
                         className={u?.is_active ? 'text-muted-foreground hover:text-red-600' : 'text-muted-foreground hover:text-green-600'}
-                        title={u?.is_active ? 'Desactivar' : 'Reactivar'}
+                        title={
+                          u?.id === user?.id
+                            ? 'No puedes desactivar tu propia cuenta'
+                            : u?.is_active
+                              ? 'Desactivar'
+                              : 'Reactivar'
+                        }
                       >
                         {u?.is_active ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
                       </Button>

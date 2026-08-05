@@ -11,18 +11,9 @@ import {
   ShoppingBag,
 } from 'lucide-react';
 import { type NavSection, type NavItem } from '@/types/navigation';
-import { type UserRole } from '@/types/database';
+import { USER_ROLES, type UserRole } from '@/types/database';
 
-const ALL_ROLES: UserRole[] = [
-  'super_admin',
-  'direccion',
-  'ventas',
-  'compras',
-  'almacen',
-  'logistica',
-  'facturacion',
-  'finanzas',
-];
+const ALL_ROLES: UserRole[] = [...USER_ROLES];
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   super_admin: 'Super Admin',
