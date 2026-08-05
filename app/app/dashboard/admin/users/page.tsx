@@ -8,6 +8,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
   Users,
   Plus,
   Search,
@@ -176,6 +182,7 @@ export default function AdminUsersPage() {
   if (role !== 'super_admin') return null;
 
   return (
+    <TooltipProvider>
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -275,25 +282,36 @@ export default function AdminUsersPage() {
                   </td>
                   <td className="py-3 px-4 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(u)} className="text-muted-foreground hover:text-rtb-navy">
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggleActive(u)}
-                        disabled={u?.id === user?.id}
-                        className={u?.is_active ? 'text-muted-foreground hover:text-red-600' : 'text-muted-foreground hover:text-green-600'}
-                        title={
-                          u?.id === user?.id
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button variant="ghost" size="sm" onClick={() => openEdit(u)} className="text-muted-foreground hover:text-rtb-navy">
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Editar usuario</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => toggleActive(u)}
+                              disabled={u?.id === user?.id}
+                              className={u?.is_active ? 'text-muted-foreground hover:text-red-600' : 'text-muted-foreground hover:text-green-600'}
+                            >
+                              {u?.is_active ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {u?.id === user?.id
                             ? 'No puedes desactivar tu propia cuenta'
                             : u?.is_active
-                              ? 'Desactivar'
-                              : 'Reactivar'
-                        }
-                      >
-                        {u?.is_active ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-                      </Button>
+                              ? 'Desactivar usuario'
+                              : 'Reactivar usuario'}
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </td>
                 </tr>
@@ -412,5 +430,6 @@ export default function AdminUsersPage() {
         </div>
       )}
     </div>
+    </TooltipProvider>
   );
 }
