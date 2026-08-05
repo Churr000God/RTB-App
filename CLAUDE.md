@@ -33,17 +33,22 @@ Variables de entorno: `app/.env` (nunca versionado — ver `.gitignore`). Planti
 
 ```
 app/
-├── app/                  # rutas (App Router): /login, /dashboard, /api/admin, /logout
+├── app/                  # rutas (App Router): /login, /dashboard, /api/admin,
+│   │                     # /api/entidades, /api/proveedores, /api/ubicaciones,
+│   │                     # /api/solicitudes-cambio, /logout
 ├── components/
 │   ├── auth/             # LoginForm
+│   ├── entidades/        # EstadoBadge (RTB-ENT-01)
 │   ├── layout/           # Sidebar, Header, DashboardShell, AuthProvider
 │   └── ui/                # shadcn/Radix
 ├── lib/
 │   ├── supabase/         # client.ts, server.ts, middleware.ts (solo redirects,
 │   │                     # sin DB), admin.ts (service_role, server-only),
 │   │                     # guards.ts (requireActiveUser/requireRole/requireApiRole)
-│   └── rbac/             # configuración de roles, permisos y hooks
-├── types/                # tipos TypeScript del sistema
+│   ├── rbac/             # configuración de roles, permisos y hooks
+│   └── entidades/        # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts,
+│                         # http.ts — capa compartida de RTB-ENT-01
+├── types/                # tipos TypeScript del sistema (database.ts, entidades.ts)
 └── middleware.ts         # protección de rutas con Supabase SSR
 db/migrations/            # SQL versionado, aplicado vía MCP apply_migration
 contexto/                 # documentos de negocio, marca y specs de cada módulo
@@ -57,14 +62,18 @@ contexto/                 # documentos de negocio, marca y specs de cada módulo
 | # | Módulo | Estado |
 |---|---|---|
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
-| 2 | Ventas | 🔜 Planificado |
-| 3 | Compras | 🔜 Planificado |
-| 4 | Almacén | 🔜 Planificado |
-| 5 | Rutas | 🔜 Planificado |
-| 6 | Facturación | 🔜 Planificado (timbrado SAT vía n8n) |
-| 7 | Finanzas | 🔜 Planificado |
+| 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
+| 3 | Ventas | 🔜 Planificado |
+| 4 | Compras | 🔜 Planificado |
+| 5 | Almacén | 🔜 Planificado |
+| 6 | Rutas | 🔜 Planificado |
+| 7 | Facturación | 🔜 Planificado (timbrado SAT vía n8n) |
+| 8 | Finanzas | 🔜 Planificado |
 
-Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
+Especificación de cada módulo en `contexto/RTB-PRO-*.md`. RTB-ENT-01 tiene su
+propio par: `contexto/RTB-ENT-01_Modulo_Entidades.md` (spec corregida, la que
+manda) y `contexto/AUDITORIA_RTB-ENT-01.md` (qué traía el paquete original de
+AbacusAI y qué se corrigió).
 
 ## Identidad visual
 
@@ -138,6 +147,40 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
   el lockfile a mano hay que usar la misma flag.
 - Node 20 dentro del contenedor Docker; el host puede tener otra versión (irrelevante
   gracias al contenedor).
+- **`SECURITY DEFINER` en vista vs. función.** El advisor de Supabase marca
+  **ERROR** una vista `security_invoker = false`, pero sólo **WARN** una función
+  `SECURITY DEFINER` equivalente (mismo patrón que `is_super_admin()` de
+  `001_auth_profiles.sql`, ya aceptado). Para exponer datos que saltan la RLS
+  de otra tabla (p.ej. `public.usuarios_directorio()`,
+  `public.proveedor_cuentas_resumen()` de RTB-ENT-01) usar siempre función, no
+  vista.
+- **`docker compose build` no corre `next build`.** El target por defecto del
+  `Dockerfile` es `dev` (`npm run dev`), que no compila ni type-checka nada.
+  Para el checklist de verificación ("TypeScript real: `ignoreBuildErrors:
+  false`") hay que compilar explícitamente el stage que sí lo hace:
+  `docker build --target builder -f Dockerfile .`
+- **El query builder de `@supabase/supabase-js` es `PromiseLike`, no
+  `Promise`.** No tiene `.finally()`; si se necesita, envolver con
+  `Promise.resolve(query)`.
+- **Roles del paquete de un submódulo vs. roles reales.** Ya pasó con RTB-ENT-01
+  (`admin`/`rutas` en la spec de AbacusAI, `direccion`/`logistica` en
+  `profiles.role`): antes de generar RLS o UI a partir de una spec externa,
+  verificar sus nombres de rol contra el `CHECK` de `001_auth_profiles.sql`, no
+  asumir que coinciden.
+- **RLS sin el `GRANT` de tabla no falla como se espera — falla en silencio
+  desde el cliente.** El privilegio de tabla se comprueba antes que RLS: una
+  política `for select` sin su `GRANT SELECT ... TO authenticated` no hace que
+  Postgres "sólo aplique RLS" — deniega el acceso por completo (`42501`), y
+  supabase-js/PostgREST devuelven ese error dentro del objeto de respuesta,
+  no como excepción. Un `.then(({ data }) => setX(data ?? []))` sin mirar
+  `error` lo convierte en una lista vacía silenciosa, no en un fallo visible.
+  Pasó con `audit_log` en RTB-ENT-01 (`008_audit_log_grant_select.sql`) y no
+  lo detectaron ni la lectura de código ni las pruebas de RLS por SQL directo
+  (que corren como `postgres`, dueño de la tabla, y no pasan por el `GRANT`)
+  — sólo la UI real con una sesión de usuario. Al escribir una tabla nueva:
+  verificar `GRANT` de tabla y política RLS por separado, y probar tanto por
+  SQL simulando el rol (`set local role authenticated` +
+  `set_config('request.jwt.claim.sub', ...)`) como por la UI real.
 
 ## Historial de decisiones
 
@@ -159,6 +202,29 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
   De paso se retiró por completo la deuda de Prisma/NextAuth (antes solo
   documentada como pendiente) y se confirmó el proyecto Supabase correcto de RTB:
   `RTB-App` (ref `dgafffpbhktxadiqmmwl`).
+- **2026-08-05** — Submódulo RTB-ENT-01 (Gestión de Entidades: clientes,
+  proveedores, ubicaciones internas). Paquete de origen: AbacusAI
+  (`Desarrollo_Subm_dulo_Cliente.zip`) — documento técnico maestro + 6
+  procedimientos operativos (P01–P06) + 4 mockups de pantalla, sin código.
+  Auditado antes de implementar: el documento maestro y los 6 procedimientos se
+  contradecían entre sí (roles inexistentes, políticas RLS con `auth.role()`
+  que nunca evalúan verdadero, tres fuentes de estado distintas, umbral de
+  aprobación distinto entre documentos, `ubicaciones_internas` sin jerarquía).
+  Se implementó la spec corregida, no la original — detalle completo de cada
+  hallazgo y su corrección en `contexto/AUDITORIA_RTB-ENT-01.md`. Tres
+  migraciones nuevas (`002_entidades_core.sql`, `003_ubicaciones_internas.sql`,
+  `004_cuentas_bancarias.sql` + un ajuste puntual en `005_solicitudes_tipo_cambio.sql`),
+  verificadas contra Supabase real (generación de clave, promoción automática a
+  `mixta`, árbol de ubicaciones de 4 niveles con código heredado, validador de
+  CLABE, `get_advisors` sin `ERROR`) y contra un build de producción real
+  (`docker build --target builder`, `typescript.ignoreBuildErrors: false`).
+  La verificación clic a clic en la app real (sesión de `super_admin`, sin
+  tocar la cuenta del dueño del proyecto) encontró dos bugs que ni la lectura
+  de código ni las pruebas de RLS por SQL directo habían visto: `audit_log`
+  sin `GRANT SELECT` para `authenticated` (`008_audit_log_grant_select.sql`
+  — la pestaña de Auditoría fallaba en silencio, no de forma visible) y
+  `audit_log.usuario_id` sin `ON DELETE SET NULL`
+  (`007_audit_log_on_delete_set_null.sql`). Corregidos y reverificados.
 
 ## TODO
 

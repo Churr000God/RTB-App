@@ -29,3 +29,7 @@ graphify-out/
 
 # Docker
 .docker/
+
+# Claude Code — settings.json es de equipo (sí se sube); settings.local.json
+# es el allowlist de permisos de cada máquina, no de proyecto.
+.claude/settings.local.json
