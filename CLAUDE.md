@@ -164,6 +164,3 @@ Especificación de cada módulo en `contexto/RTB-PRO-*.md`.
 
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
-- Desactivar "Enable Sign Ups" en Supabase Dashboard → Authentication → Providers →
-  Email del proyecto `RTB-App`. No hay herramienta MCP para este ajuste (requiere un
-  token de gestión de Supabase, no la `service_role key`) — paso manual pendiente.

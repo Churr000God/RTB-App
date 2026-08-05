@@ -45,6 +45,14 @@ Como capa adicional, `authenticated` no tiene `GRANT UPDATE` sobre las columnas
 `role`/`is_active` de `profiles` — la escalada es imposible a nivel de privilegio,
 no solo de política.
 
+Además, el registro público (`Enable Sign Ups`) se desactivó en Authentication →
+Providers → Email del dashboard de Supabase (2026-08-04). Esto bloquea
+`/auth/v1/signup`, pero no afecta a `POST /api/admin/users`: esa ruta crea usuarios
+con `admin.auth.admin.createUser()` vía `service_role`, un camino administrativo
+aparte que el toggle de registro público no controla. El alta de usuarios sigue
+funcionando exclusivamente desde `/dashboard/admin/users`, operado por un
+`super_admin`.
+
 ### 3. Cliente `service_role` sin aislar
 
 **Antes:** `createSupabaseAdminClient()` vivía en `app/lib/supabase/server.ts`,
@@ -108,8 +116,6 @@ Verificado: intentar auto-desactivarse devuelve 400 con mensaje explicativo.
 
 ## Pendiente
 
-- Desactivar "Enable Sign Ups" en el dashboard de Supabase (Authentication →
-  Providers → Email) — no hay herramienta MCP para este ajuste.
 - Sin endpoint `DELETE` para usuarios (decisión deliberada): el borrado duro
   destruiría historial en cuanto los módulos de Ventas/Compras referencien
   `profiles(id)`. Desactivar ya impide operar por completo.
