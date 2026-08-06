@@ -5,6 +5,9 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { entidadCreateSchema } from '@/lib/entidades/schemas';
+import { UMBRAL_APROBACION_CREDITO } from '@/lib/entidades/config';
+import { ejecutaDirecto } from '@/lib/entidades/permisos';
+import { mensajeDuplicadoEntidad } from '@/lib/entidades/errores';
 
 const PAGE_SIZE = 20;
 
@@ -33,7 +36,9 @@ export async function GET(request: Request) {
     if (estado) query = query.eq('estado', estado);
     if (q) {
       const like = `%${q.replace(/[%_]/g, '')}%`;
-      query = query.or(`nombre_legal.ilike.${like},nombre_comercial.ilike.${like},rfc.ilike.${like},clave.ilike.${like}`);
+      query = query.or(
+        `nombre_legal.ilike.${like},nombre_comercial.ilike.${like},rfc.ilike.${like},clave.ilike.${like},siglas.ilike.${like}`
+      );
     }
 
     const { data, error, count } = await query;
@@ -106,9 +111,8 @@ export async function POST(request: Request) {
       .single();
 
     if (entidadError) {
-      const duplicado = /uq_entidades_rfc|duplicate key/i.test(entidadError.message);
       return NextResponse.json(
-        { error: duplicado ? 'Ya existe una entidad con ese RFC.' : entidadError.message },
+        { error: mensajeDuplicadoEntidad(entidadError.message) ?? entidadError.message },
         { status: 400 }
       );
     }
@@ -119,9 +123,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: mensaje }, { status: 500 });
     };
 
+    // E-07 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): el formulario ya
+    // avisaba "quedará pendiente de aprobación de dirección" al superar el
+    // umbral, pero el POST nunca lo aplicaba — cualquier rol podía otorgar
+    // cualquier crédito de inmediato. Se aplica la misma regla que ya rige
+    // los cambios sobre una entidad existente (REGLAS_APROBACION.limite_credito,
+    // vía ejecutaDirecto): si el rol no ejecuta directo, la entidad nace con
+    // crédito 0 y el valor pedido queda pendiente en solicitudes_cambio,
+    // resuelto por el mismo endpoint que ya resuelve cambios de crédito
+    // (POST /api/solicitudes-cambio/[id]/resolver).
+    let creditoPendiente: number | null = null;
     if (cliente) {
-      const { error } = await supabase.from('clientes').insert({ ...cliente, entidad_id: entidad.id });
+      const limiteSolicitado = Number(cliente.limite_credito) || 0;
+      const requiereAprobacion = limiteSolicitado > UMBRAL_APROBACION_CREDITO && !ejecutaDirecto('limite_credito', auth.profile.role);
+      const clienteInsert = requiereAprobacion ? { ...cliente, limite_credito: 0 } : cliente;
+
+      const { data: clienteRow, error } = await supabase
+        .from('clientes')
+        .insert({ ...clienteInsert, entidad_id: entidad.id })
+        .select('id')
+        .single();
       if (error) return revertir('No se pudieron guardar los datos de cliente; la operación fue revertida.');
+
+      if (requiereAprobacion) {
+        const { error: solicitudError } = await supabase.from('solicitudes_cambio').insert({
+          tabla: 'clientes',
+          registro_id: clienteRow.id,
+          tipo_cambio: 'limite_credito',
+          cambios: { limite_credito: limiteSolicitado },
+          motivo: `Límite de crédito solicitado al alta ($${limiteSolicitado.toLocaleString('es-MX')}) supera el umbral de aprobación ($${UMBRAL_APROBACION_CREDITO.toLocaleString('es-MX')}).`,
+        });
+        if (solicitudError) return revertir('No se pudo registrar la solicitud de aprobación de crédito; la operación fue revertida.');
+        creditoPendiente = limiteSolicitado;
+      }
     }
     if (proveedor) {
       const { error } = await supabase.from('proveedores').insert({ ...proveedor, entidad_id: entidad.id });
@@ -140,7 +174,10 @@ export async function POST(request: Request) {
       if (error) return revertir('No se pudo guardar la dirección fiscal; la operación fue revertida.');
     }
 
-    return NextResponse.json({ success: true, id: entidad.id, clave: entidad.clave }, { status: 201 });
+    return NextResponse.json(
+      { success: true, id: entidad.id, clave: entidad.clave, creditoPendiente },
+      { status: 201 }
+    );
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

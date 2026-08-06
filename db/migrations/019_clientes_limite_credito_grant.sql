@@ -1,0 +1,26 @@
+-- ==========================================
+-- RTB Sistema — 018: GRANT UPDATE (limite_credito) faltante en clientes
+--
+-- Hallazgo propio al implementar E-07 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md):
+-- REGLAS_APROBACION.limite_credito ya declaraba que super_admin ejecuta
+-- directo (ejecutaDirecto(), lib/entidades/permisos.ts) y el resolver de
+-- solicitudes_cambio ya sabía aplicar el cambio — pero eso funciona porque
+-- el resolver usa createSupabaseAdminClient() (service_role, sin
+-- restricción de columna). Al construir la ruta que faltaba
+-- (PATCH /api/entidades/[id]/cliente, para que super_admin/direccion/ventas
+-- puedan tocar el crédito de una entidad YA creada, no sólo al alta) con
+-- el cliente del propio usuario, el UPDATE directo de super_admin falló:
+-- `limite_credito` nunca estuvo en el GRANT UPDATE de 002_entidades_core.sql
+-- (sólo canal_origen/descuento_maximo/dias_credito/dias_gracia/lista_precio/
+-- vendedor_id). Mismo patrón recurrente del proyecto (GRANT de tabla u
+-- columna faltante que sólo aparece al ejercer la ruta real, no en la
+-- lectura de código ni en pruebas por SQL como `postgres`).
+--
+-- Seguro de conceder: `clientes_update` (RLS) ya restringe UPDATE a
+-- super_admin/direccion/ventas, y en la práctica sólo super_admin llega a
+-- esta ruta directa (ejecutaDirecto() nunca es true para direccion/ventas
+-- en 'limite_credito' — su único camino sigue siendo la solicitud +
+-- resolver, sin cambios).
+-- ==========================================
+
+grant update (limite_credito) on public.clientes to authenticated;

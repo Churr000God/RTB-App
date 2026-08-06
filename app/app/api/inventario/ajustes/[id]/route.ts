@@ -18,7 +18,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 
     const { data: lineas } = await supabase
       .from('inventario_ajuste_lineas')
-      .select('*, productos(codigo_interno, nombre)')
+      .select('*, productos(codigo_interno, nombre), ubicaciones_internas(codigo, nombre)')
       .eq('ajuste_id', params.id);
 
     return NextResponse.json({ ajuste, lineas: lineas ?? [] });

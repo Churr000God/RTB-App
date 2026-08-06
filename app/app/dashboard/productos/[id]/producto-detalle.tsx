@@ -9,17 +9,45 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, ArrowLeftRight, Loader2, Package, Pencil } from 'lucide-react';
+import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { ImagenUploader } from '@/components/inventario/imagen-uploader';
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowUp,
+  Loader2,
+  Package,
+  Pencil,
+  Plus,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import type {
+  CostoOrigen,
   InventarioExistencia,
   InventarioMovimiento,
   Producto,
   ProductoCategoria,
   ProductoFamilia,
+  ProductoImagenConUrl,
   ProductoMarca,
   UnidadMedida,
 } from '@/types/inventario';
-import { MOVIMIENTO_TIPO_LABELS } from '@/lib/inventario/config';
+import { COSTO_ORIGENES } from '@/types/inventario';
+import { COSTO_ORIGEN_LABELS, MOVIMIENTO_TIPO_LABELS } from '@/lib/inventario/config';
 
 interface Props {
   producto: Producto;
@@ -38,6 +66,23 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
   const totalTeorica = existenciasIniciales.reduce((acc, e) => acc + Number(e.cantidad_teorica), 0);
   const totalApartada = existenciasIniciales.reduce((acc, e) => acc + Number(e.cantidad_apartada), 0);
 
+  // Estado de imágenes centralizado aquí (no en ImagenesTab) para que la
+  // miniatura de la cabecera y la pestaña compartan una sola carga y una
+  // sola verdad tras subir/quitar/reordenar.
+  const [imagenes, setImagenes] = useState<ProductoImagenConUrl[]>([]);
+  const [imagenesLoading, setImagenesLoading] = useState(true);
+  const recargarImagenes = () => {
+    setImagenesLoading(true);
+    fetch(`/api/productos/${producto.id}/imagenes`)
+      .then(async (r) => {
+        const json = await r.json().catch(() => ({}));
+        if (r.ok) setImagenes(json.data ?? []);
+      })
+      .finally(() => setImagenesLoading(false));
+  };
+  useEffect(recargarImagenes, [producto.id]);
+  const principal = imagenes.find((i) => i.es_principal) ?? null;
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <Button variant="ghost" size="sm" asChild>
@@ -47,15 +92,27 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
       </Button>
 
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-2">
-            <Package className="w-6 h-6" /> {producto.nombre}
-          </h1>
-          <p className="text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
-            <span className="tabular-nums text-xs">{producto.codigo_interno}</span>
-            {producto.sku && <span className="tabular-nums text-xs">SKU: {producto.sku}</span>}
-            <ProductoEstadoBadge estado={producto.estado} />
-          </p>
+        <div className="flex items-start gap-4">
+          {!imagenesLoading && (
+            <div className="w-16 h-16 rounded-lg bg-rtb-surface flex items-center justify-center overflow-hidden shrink-0">
+              {principal ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={principal.url_miniatura ?? principal.url} alt={producto.nombre} className="w-full h-full object-cover" />
+              ) : (
+                <Package className="w-6 h-6 text-muted-foreground opacity-30" />
+              )}
+            </div>
+          )}
+          <div>
+            <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-2">
+              <Package className="w-6 h-6" /> {producto.nombre}
+            </h1>
+            <p className="text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
+              <span className="tabular-nums text-xs">{producto.codigo_interno}</span>
+              {producto.sku && <span className="tabular-nums text-xs">SKU: {producto.sku}</span>}
+              <ProductoEstadoBadge estado={producto.estado} />
+            </p>
+          </div>
         </div>
       </div>
 
@@ -73,6 +130,7 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
       <Tabs defaultValue="general" className="w-full">
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="imagenes">Imágenes</TabsTrigger>
           <TabsTrigger value="existencias">Existencias</TabsTrigger>
           <TabsTrigger value="kardex">Kardex</TabsTrigger>
           <TabsTrigger value="costos">Costos</TabsTrigger>
@@ -88,6 +146,15 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
             puedeEditar={puedeEditar}
           />
         </TabsContent>
+        <TabsContent value="imagenes">
+          <ImagenesTab
+            productoId={producto.id}
+            imagenes={imagenes}
+            loading={imagenesLoading}
+            puedeEditar={puedeEditar}
+            onCambio={recargarImagenes}
+          />
+        </TabsContent>
         <TabsContent value="existencias">
           <ExistenciasTab existencias={existenciasIniciales} />
         </TabsContent>
@@ -98,6 +165,139 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
           <CostosTab productoId={producto.id} costoVigente={costoVigente} />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function ImagenesTab({
+  productoId,
+  imagenes,
+  loading,
+  puedeEditar,
+  onCambio,
+}: {
+  productoId: string;
+  imagenes: ProductoImagenConUrl[];
+  loading: boolean;
+  puedeEditar: boolean;
+  onCambio: () => void;
+}) {
+  const [accionando, setAccionando] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<ProductoImagenConUrl | null>(null);
+
+  const patch = async (imagenId: string, body: Record<string, unknown>) => {
+    setAccionando(imagenId);
+    await fetch(`/api/productos/${productoId}/imagenes/${imagenId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    setAccionando(null);
+    onCambio();
+  };
+
+  const quitar = async (imagenId: string) => {
+    setAccionando(imagenId);
+    await fetch(`/api/productos/${productoId}/imagenes/${imagenId}`, { method: 'DELETE' });
+    setAccionando(null);
+    onCambio();
+  };
+
+  if (loading) return <p className="text-sm text-muted-foreground">Cargando…</p>;
+
+  return (
+    <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
+      {puedeEditar && <ImagenUploader productoId={productoId} onSubida={onCambio} />}
+
+      {imagenes.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Sin fotos todavía.</p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+          {imagenes.map((img, i) => (
+            <div key={img.id} className="rounded-xl overflow-hidden bg-rtb-surface/40 relative">
+              <Dialog open={lightbox?.id === img.id} onOpenChange={(open) => setLightbox(open ? img : null)}>
+                <DialogTrigger asChild>
+                  <button type="button" className="block w-full aspect-square">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={img.url_miniatura ?? img.url}
+                      alt={img.descripcion ?? ''}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                </DialogTrigger>
+                <DialogContent className="max-w-3xl">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={img.url} alt={img.descripcion ?? ''} className="w-full h-auto rounded-lg" />
+                </DialogContent>
+              </Dialog>
+
+              {img.es_principal && (
+                <span className="absolute top-1.5 left-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rtb-teal text-white flex items-center gap-0.5">
+                  <Star className="w-3 h-3 fill-current" /> PRINCIPAL
+                </span>
+              )}
+
+              {puedeEditar && (
+                <div className="flex items-center justify-between gap-1 p-1.5 bg-white">
+                  <div className="flex gap-0.5">
+                    <button
+                      type="button"
+                      disabled={accionando === img.id || i === 0}
+                      title="Subir orden"
+                      className="p-1 text-rtb-navy-mid disabled:opacity-30"
+                      onClick={() => patch(img.id, { orden: Math.max(0, (imagenes[i - 1]?.orden ?? 0)) })}
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={accionando === img.id || i === imagenes.length - 1}
+                      title="Bajar orden"
+                      className="p-1 text-rtb-navy-mid disabled:opacity-30"
+                      onClick={() => patch(img.id, { orden: (imagenes[i + 1]?.orden ?? img.orden) + 1 })}
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                    {!img.es_principal && (
+                      <button
+                        type="button"
+                        disabled={accionando === img.id}
+                        title="Hacer principal"
+                        className="p-1 text-rtb-teal disabled:opacity-30"
+                        onClick={() => patch(img.id, { es_principal: true })}
+                      >
+                        <Star className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button type="button" disabled={accionando === img.id} className="p-1 text-destructive disabled:opacity-30">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>¿Quitar esta foto?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Se borra el archivo del bucket. La acción no se puede deshacer.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => quitar(img.id)} className="bg-destructive hover:bg-destructive/90">
+                          Quitar
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -382,29 +582,125 @@ function KardexTab({ productoId }: { productoId: string }) {
 }
 
 function CostosTab({ productoId, costoVigente }: { productoId: string; costoVigente: number | null }) {
+  const { role } = useAuth();
   const [costos, setCostos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Gap de UI (contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4): POST
+  // /api/productos/[id]/costos existía y respondía (el rol lo permite:
+  // compras, finanzas, direccion, super_admin), no había botón.
+  const [creando, setCreando] = useState(false);
+  const [costoUnitario, setCostoUnitario] = useState('');
+  const [origen, setOrigen] = useState<CostoOrigen>('catalogo_manual');
+  const [vigenteDesde, setVigenteDesde] = useState('');
+  const [motivo, setMotivo] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const cargar = async () => {
+    setLoading(true);
+    const res = await fetch(`/api/productos/${productoId}/costos`);
+    const data = await res.json();
+    setCostos(data.data ?? []);
+    setLoading(false);
+  };
+
   useEffect(() => {
-    void (async () => {
-      const res = await fetch(`/api/productos/${productoId}/costos`);
-      const data = await res.json();
-      setCostos(data.data ?? []);
-      setLoading(false);
-    })();
+    void cargar();
   }, [productoId]);
+
+  const registrarCosto = async () => {
+    setError(null);
+    setEnviando(true);
+    const res = await fetch(`/api/productos/${productoId}/costos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        costo_unitario: Number(costoUnitario),
+        origen,
+        vigente_desde: vigenteDesde || undefined,
+        motivo: motivo || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setEnviando(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo registrar el costo.');
+      return;
+    }
+    setCreando(false);
+    setCostoUnitario('');
+    setVigenteDesde('');
+    setMotivo('');
+    void cargar();
+  };
 
   return (
     <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-display font-semibold text-rtb-navy">Histórico de costo de catálogo</h2>
-        <p className="text-sm">
-          Costo vigente:{' '}
-          <span className="font-semibold tabular-nums">
-            {costoVigente != null ? `$${Number(costoVigente).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : 'Sin costo'}
-          </span>
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm">
+            Costo vigente:{' '}
+            <span className="font-semibold tabular-nums">
+              {costoVigente != null ? `$${Number(costoVigente).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : 'Sin costo'}
+            </span>
+          </p>
+          {puede(role, 'producto_costos', 'insert') && !creando && (
+            <Button size="sm" onClick={() => setCreando(true)}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> Nuevo costo
+            </Button>
+          )}
+        </div>
       </div>
+
+      {creando && (
+        <div className="p-3 bg-rtb-surface/60 rounded-lg space-y-2">
+          {error && (
+            <div className="flex items-center gap-2 p-2 bg-red-50 text-red-700 rounded-lg text-xs">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-xs">Costo unitario</Label>
+              <Input type="number" step="any" min="0" value={costoUnitario} onChange={(e) => setCostoUnitario(e.target.value)} className="tabular-nums" />
+            </div>
+            <div>
+              <Label className="text-xs">Origen</Label>
+              <select
+                value={origen}
+                onChange={(e) => setOrigen(e.target.value as CostoOrigen)}
+                className="w-full text-sm border border-border rounded-lg px-3 py-2"
+              >
+                {COSTO_ORIGENES.map((o) => (
+                  <option key={o} value={o}>
+                    {COSTO_ORIGEN_LABELS[o]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label className="text-xs">Vigente desde (opcional)</Label>
+              <Input type="date" value={vigenteDesde} onChange={(e) => setVigenteDesde(e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs">Motivo (retroactivo lo exige)</Label>
+              <Input value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setCreando(false)}>
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={registrarCosto} disabled={enviando || !costoUnitario}>
+              Guardar
+            </Button>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <Loader2 className="w-5 h-5 text-rtb-teal animate-spin" />
       ) : (

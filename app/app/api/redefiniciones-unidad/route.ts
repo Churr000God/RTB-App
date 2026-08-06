@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     const supabase = createSupabaseServerClient();
     let query = supabase
       .from('producto_unidad_redefiniciones')
-      .select('*')
+      .select('*, productos(codigo_interno, nombre)')
       .order('created_at', { ascending: false });
     if (productoId) query = query.eq('producto_id', productoId);
     if (estado) query = query.eq('estado', estado);

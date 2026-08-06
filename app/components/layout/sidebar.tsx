@@ -18,6 +18,18 @@ export function Sidebar({ role }: SidebarProps) {
   const sections = getNavForRole(role);
   const [collapsed, setCollapsed] = useState(false);
 
+  // E-11 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): sidebar.tsx marcaba
+  // "activo" cualquier item cuyo href fuera prefijo de pathname —
+  // "Existencias" (/dashboard/inventario) y "Conteos físicos"
+  // (/dashboard/inventario/conteos) quedaban ambos resaltados en
+  // /dashboard/inventario/conteos/[id]. Se resuelve global: entre TODOS
+  // los hrefs de la navegación, gana el más específico (el más largo) que
+  // calce con la ruta actual — no cada item comparando sólo consigo mismo.
+  const todosLosHrefs = sections?.flatMap((s: any) => s?.items?.map((i: any) => i?.href) ?? []) ?? [];
+  const hrefActivo = todosLosHrefs
+    .filter((href: string) => pathname === href || (href !== '/dashboard' && pathname?.startsWith?.(`${href}/`)))
+    .sort((a: string, b: string) => b.length - a.length)[0];
+
   return (
     <aside
       className={cn(
@@ -55,8 +67,33 @@ export function Sidebar({ role }: SidebarProps) {
             <ul className="space-y-0.5">
               {section?.items?.map((item: any) => {
                 const Icon = item?.icon;
-                const isActive = pathname === item?.href ||
-                  (item?.href !== '/dashboard' && pathname?.startsWith?.(item?.href ?? ''));
+                const isActive = item?.href === hrefActivo;
+
+                // M-08/E-11: un módulo sin pantalla (badge) se muestra
+                // deshabilitado con su etiqueta, no como <Link> navegable a
+                // un 404 — mismo tratamiento que ya usan las tarjetas
+                // "Próximamente" del Dashboard.
+                if (item?.badge) {
+                  return (
+                    <li key={item?.href}>
+                      <div
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-white/30 cursor-default"
+                        title={collapsed ? `${item?.label} — ${item.badge}` : undefined}
+                      >
+                        {Icon && <Icon className="w-5 h-5 shrink-0" />}
+                        {!collapsed && (
+                          <span className="flex items-center gap-2 truncate">
+                            {item?.label}
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 shrink-0">
+                              {item.badge}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                }
+
                 return (
                   <li key={item?.href}>
                     <Link

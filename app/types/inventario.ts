@@ -208,6 +208,34 @@ export type ProductoConMarca = Producto & {
   producto_marcas: Pick<ProductoMarca, 'clave' | 'nombre'> | null;
 };
 
+/** 021_producto_imagenes.sql — fotos de catálogo, 0..N con una principal. */
+export interface ProductoImagen {
+  id: string;
+  producto_id: string;
+  path: string;
+  miniatura_path: string | null;
+  es_principal: boolean;
+  orden: number;
+  descripcion: string | null;
+  mime: string;
+  bytes: number;
+  ancho: number | null;
+  alto: number | null;
+  activo: boolean;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** ProductoImagen + las URL públicas ya resueltas EN EL SERVIDOR — nunca se
+ *  construyen en código 'use client' (NEXT_PUBLIC_SUPABASE_URL no llega al
+ *  bundle de cliente en el build de producción, ver CLAUDE.md). */
+export type ProductoImagenConUrl = ProductoImagen & { url: string; url_miniatura: string | null };
+
+/** Forma que devuelve GET /api/productos tras adjuntarImagenPrincipal(). */
+export type ProductoConImagen = ProductoConMarca & { imagen_principal: ProductoImagenConUrl | null };
+
 // ---------- Filas de tabla — 010: costos ----------
 
 export interface ProveedorProducto {

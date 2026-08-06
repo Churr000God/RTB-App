@@ -375,7 +375,8 @@ export default function AdminUsersPage() {
                       type="password"
                       value={formData.password}
                       onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, password: e.target.value })}
-                      placeholder="Mínimo 6 caracteres"
+                      placeholder="Mínimo 8 caracteres"
+                      minLength={8}
                     />
                   </div>
                 </>

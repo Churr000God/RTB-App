@@ -7,6 +7,11 @@ import { REGLAS_APROBACION, type CambioControlado } from '@/lib/entidades/permis
 import { solicitudCambioCreateSchema } from '@/lib/entidades/schemas';
 
 // GET - listado. RLS decide: el solicitante ve las suyas, direccion/super_admin ven todas.
+// Gap de UI (contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4): no había
+// ninguna pantalla para ver/resolver solicitudes — POST .../resolver ya
+// existía y respondía. `registro_id` es polimórfico (entidades/clientes/
+// proveedores, ver `tabla`); se resuelve aquí a un nombre legible en vez
+// de dejar que cada pantalla repita el mismo join condicional.
 export async function GET(request: Request) {
   try {
     const { response } = await requireApiRole();
@@ -22,7 +27,32 @@ export async function GET(request: Request) {
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ data: data ?? [] });
+    const filas = data ?? [];
+    const idsEntidades = filas.filter((s) => s.tabla === 'entidades').map((s) => s.registro_id);
+    const idsClientes = filas.filter((s) => s.tabla === 'clientes').map((s) => s.registro_id);
+    const idsProveedores = filas.filter((s) => s.tabla === 'proveedores').map((s) => s.registro_id);
+
+    const [entidadesDirectas, clientes, proveedores] = await Promise.all([
+      idsEntidades.length ? supabase.from('entidades').select('id, nombre_legal').in('id', idsEntidades) : { data: [] },
+      idsClientes.length ? supabase.from('clientes').select('id, entidad_id').in('id', idsClientes) : { data: [] },
+      idsProveedores.length ? supabase.from('proveedores').select('id, entidad_id').in('id', idsProveedores) : { data: [] },
+    ]);
+
+    const idsEntidadesVia = [...(clientes.data ?? []), ...(proveedores.data ?? [])].map((r: any) => r.entidad_id);
+    const entidadesVia = idsEntidadesVia.length
+      ? (await supabase.from('entidades').select('id, nombre_legal').in('id', idsEntidadesVia)).data ?? []
+      : [];
+    const nombrePorEntidad = new Map([...(entidadesDirectas.data ?? []), ...entidadesVia].map((e: any) => [e.id, e.nombre_legal]));
+    const entidadIdPorCliente = new Map((clientes.data ?? []).map((c: any) => [c.id, c.entidad_id]));
+    const entidadIdPorProveedor = new Map((proveedores.data ?? []).map((p: any) => [p.id, p.entidad_id]));
+
+    const enriquecidas = filas.map((s) => {
+      const entidadId =
+        s.tabla === 'entidades' ? s.registro_id : s.tabla === 'clientes' ? entidadIdPorCliente.get(s.registro_id) : entidadIdPorProveedor.get(s.registro_id);
+      return { ...s, entidad_nombre: entidadId ? nombrePorEntidad.get(entidadId) ?? null : null };
+    });
+
+    return NextResponse.json({ data: enriquecidas });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

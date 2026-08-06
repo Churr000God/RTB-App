@@ -3,13 +3,18 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
+import { CONTEO_DETALLE_COLUMNAS_CAPTURA } from '@/lib/inventario/config';
 
 // GET - líneas de captura, VISTA CIEGA REAL: usa el cliente del propio
-// usuario (RLS + GRANT SELECT por columna), así que select('*') aquí
-// simplemente NO trae cantidad_teorica/diferencia/valor_diferencia/
-// costo_unitario_snapshot/costo_origen para un capturista — no es un
-// filtro de esta ruta, es un privilegio de Postgres (012). Para la
-// conciliación con teórico visible usar /conciliacion.
+// usuario (RLS + GRANT SELECT por columna). `select('*')` exige SELECT
+// sobre TODAS las columnas de la tabla y por eso fallaba con
+// `permission denied for table` para cualquier rol (E-02,
+// contexto/AUDITORIA_QA_ROLES_2026-08-06.md) — el GRANT sí existe, sólo
+// que restringido a 21 de 28 columnas (CONTEO_DETALLE_COLUMNAS_CAPTURA,
+// espejo exacto de 012). Pedir esa lista explícita, en vez de `*`, es la
+// corrección: NO se amplía el GRANT, porque eso expondría
+// cantidad_teorica/diferencia al capturista y rompería la vista ciega.
+// Para la conciliación con teórico visible usar /conciliacion.
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   try {
     const { response } = await requireApiRole();
@@ -22,7 +27,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     const supabase = createSupabaseServerClient();
     let query = supabase
       .from('inventario_conteo_detalles')
-      .select('*, productos(codigo_interno, nombre, sku)')
+      .select(`${CONTEO_DETALLE_COLUMNAS_CAPTURA}, productos(codigo_interno, nombre, sku, unidad_contenido_id)`)
       .eq('conteo_id', params.id)
       .order('created_at', { ascending: true });
     if (ubicacionId) query = query.eq('ubicacion_id', ubicacionId);

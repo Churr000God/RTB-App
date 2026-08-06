@@ -148,7 +148,7 @@ export function EntidadesExplorer({ initialData, initialCount, pageSize, initial
           <div className="relative flex-1 min-w-[220px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Buscar por razón social, clave o RFC..."
+              placeholder="Buscar por razón social, siglas, clave o RFC..."
               value={q}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
               onKeyDown={(e: React.KeyboardEvent) => e.key === 'Enter' && aplicarFiltro({ q })}
@@ -202,7 +202,14 @@ export function EntidadesExplorer({ initialData, initialCount, pageSize, initial
                 >
                   <td className="py-3 px-4 text-xs tabular-nums text-muted-foreground">{e.clave}</td>
                   <td className="py-3 px-4">
-                    <p className="text-sm font-display font-medium text-rtb-navy">{e.nombre_legal}</p>
+                    <p className="text-sm font-display font-medium text-rtb-navy">
+                      {e.siglas && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rtb-navy/5 text-rtb-navy-mid tabular-nums mr-1.5 align-middle">
+                          {e.siglas}
+                        </span>
+                      )}
+                      {e.nombre_legal}
+                    </p>
                     {e.nombre_comercial && <p className="text-xs text-muted-foreground">{e.nombre_comercial}</p>}
                   </td>
                   <td className="py-3 px-4 text-xs tabular-nums">{e.rfc ?? '—'}</td>

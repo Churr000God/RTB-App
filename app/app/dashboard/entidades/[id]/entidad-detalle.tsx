@@ -10,9 +10,12 @@ import {
   CONDICION_PAGO_LABELS,
   ENTIDAD_TIPO_LABELS,
   PERSONA_TIPO_LABELS,
+  UMBRAL_APROBACION_CREDITO,
 } from '@/lib/entidades/config';
 import { EntidadEstadoBadge } from '@/components/entidades/estado-badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type {
   AuditLogEntry,
@@ -25,7 +28,7 @@ import type {
   ProveedorCuentaResumen,
   SolicitudCambio,
 } from '@/types/entidades';
-import { ArrowLeft, Ban, Lock, ShieldAlert, Unlock } from 'lucide-react';
+import { ArrowLeft, Ban, Loader2, Lock, Pencil, ShieldAlert, Unlock } from 'lucide-react';
 
 interface Props {
   entidad: Entidad;
@@ -34,26 +37,56 @@ interface Props {
   contactos: Contacto[];
   direcciones: Direccion[];
   solicitudesPendientes: SolicitudCambio[];
+  avisoInicial?: string | null;
 }
 
-export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcciones, solicitudesPendientes }: Props) {
+export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcciones, solicitudesPendientes, avisoInicial }: Props) {
   const { role } = useAuth();
   const router = useRouter();
   const [modalBloqueo, setModalBloqueo] = useState<'temporal' | 'permanente' | 'desbloquear' | null>(null);
   const [motivo, setMotivo] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mensaje, setMensaje] = useState<string | null>(null);
+  const [mensaje, setMensaje] = useState<string | null>(avisoInicial ?? null);
 
   const bloqueada = entidad.estado === 'bloqueado_temporal' || entidad.estado === 'bloqueado_permanente';
   const puedeBloquear = role === 'super_admin' || role === 'direccion';
 
-  const iniciales = entidad.nombre_legal
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p[0])
-    .join('')
-    .toUpperCase();
+  const solicitudCredito = solicitudesPendientes.find((s) => s.tabla === 'clientes' && s.tipo_cambio === 'limite_credito');
+  const [editandoCredito, setEditandoCredito] = useState(false);
+  const [nuevoLimite, setNuevoLimite] = useState('');
+  const [creditoMsg, setCreditoMsg] = useState<string | null>(null);
+  const [creditoError, setCreditoError] = useState<string | null>(null);
+  const [enviandoCredito, setEnviandoCredito] = useState(false);
+
+  const guardarCredito = async () => {
+    setCreditoError(null);
+    setEnviandoCredito(true);
+    const res = await fetch(`/api/entidades/${entidad.id}/cliente`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limite_credito: Number(nuevoLimite) || 0 }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setEnviandoCredito(false);
+    if (!res.ok) {
+      setCreditoError(data?.error ?? 'No se pudo actualizar el límite de crédito.');
+      return;
+    }
+    setEditandoCredito(false);
+    setNuevoLimite('');
+    setCreditoMsg(data.message ?? 'Límite de crédito actualizado.');
+    router.refresh();
+  };
+
+  const iniciales =
+    entidad.siglas ??
+    entidad.nombre_legal
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((p) => p[0])
+      .join('')
+      .toUpperCase();
 
   const resolverBloqueo = async () => {
     if (!motivo.trim()) {
@@ -114,7 +147,8 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
             <div>
               <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight">{entidad.nombre_legal}</h1>
               <p className="text-sm text-muted-foreground tabular-nums">
-                {entidad.clave} · RFC: {entidad.rfc ?? '—'}
+                {entidad.clave}
+                {entidad.siglas && ` · ${entidad.siglas}`} · RFC: {entidad.rfc ?? '—'}
               </p>
               <div className="flex flex-wrap items-center gap-2 mt-2">
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rtb-surface text-rtb-navy-mid">
@@ -161,17 +195,69 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
 
         <TabsContent value="general" className="space-y-4 mt-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card titulo="Datos generales">
+            <DatosGeneralesCard entidad={entidad} puedeEditar={puede(role, 'entidades', 'update')} />
+
+            <Card titulo="Modificación controlada (P05)">
               <Dato label="Tipo de persona" valor={PERSONA_TIPO_LABELS[entidad.persona_tipo]} />
-              <Dato label="Nombre comercial" valor={entidad.nombre_comercial ?? '—'} />
-              <Dato label="Correo" valor={entidad.correo_principal ?? '—'} />
-              <Dato label="Teléfono" valor={entidad.telefono_principal ?? '—'} />
-              <Dato label="Fecha de alta" valor={new Date(entidad.created_at).toLocaleDateString('es-MX', { timeZone: 'UTC' })} />
+              <Dato label="Razón social" valor={entidad.nombre_legal} />
+              <Dato label="RFC" valor={entidad.rfc ?? '—'} />
+              <p className="text-xs text-muted-foreground pt-1">
+                Estos tres campos requieren una solicitud de cambio aprobada (P05), no se editan directo.
+              </p>
             </Card>
 
             {cliente && (
               <Card titulo="Condiciones comerciales · Cliente">
-                <Dato label="Límite de crédito" valor={`$${Number(cliente.limite_credito).toLocaleString('es-MX')}`} />
+                <div className="flex items-center justify-between text-sm py-1">
+                  <span className="text-muted-foreground">Límite de crédito</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-rtb-navy font-medium">${Number(cliente.limite_credito).toLocaleString('es-MX')}</span>
+                    {puede(role, 'clientes', 'update') && !editandoCredito && (
+                      <button type="button" onClick={() => setEditandoCredito(true)} className="text-rtb-teal">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </span>
+                </div>
+                {editandoCredito && (
+                  <div className="p-2 bg-rtb-surface/60 rounded-lg space-y-2">
+                    <input
+                      type="number"
+                      min="0"
+                      value={nuevoLimite}
+                      onChange={(e) => setNuevoLimite(e.target.value)}
+                      placeholder="Nuevo límite"
+                      className="w-full text-sm border border-border rounded-lg px-2 py-1.5 tabular-nums"
+                    />
+                    {Number(nuevoLimite) > UMBRAL_APROBACION_CREDITO && (
+                      <p className="text-[11px] text-accent">
+                        Supera ${UMBRAL_APROBACION_CREDITO.toLocaleString('es-MX')} — quedará pendiente de aprobación de dirección.
+                      </p>
+                    )}
+                    {creditoError && <p className="text-[11px] text-destructive">{creditoError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setEditandoCredito(false);
+                          setCreditoError(null);
+                        }}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button size="sm" onClick={guardarCredito} disabled={enviandoCredito || !nuevoLimite}>
+                        Guardar
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {creditoMsg && <p className="text-[11px] text-rtb-teal">{creditoMsg}</p>}
+                {solicitudCredito && (
+                  <p className="text-[11px] text-accent">
+                    Solicitud pendiente: ${Number(solicitudCredito.cambios.limite_credito ?? 0).toLocaleString('es-MX')}
+                  </p>
+                )}
                 <Dato label="Días de crédito" valor={String(cliente.dias_credito)} />
                 <Dato label="Descuento base" valor={`${cliente.descuento_maximo}%`} />
                 <Dato label="Lista de precios" valor={cliente.lista_precio ?? '—'} />
@@ -281,6 +367,142 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
   );
 }
 
+// Antes esta sección era sólo lectura (<Dato .../> a secas) y el PATCH de
+// /api/entidades/[id] existía sin que ninguna pantalla lo llamara — un dato
+// mal capturado (correo, teléfono, siglas...) no se podía corregir desde la
+// app. Editables aquí = exactamente el GRANT UPDATE de 020_entidades_siglas.sql.
+function DatosGeneralesCard({ entidad, puedeEditar }: { entidad: Entidad; puedeEditar: boolean }) {
+  const [editando, setEditando] = useState(false);
+  const [form, setForm] = useState({
+    siglas: entidad.siglas ?? '',
+    nombre_comercial: entidad.nombre_comercial ?? '',
+    correo_principal: entidad.correo_principal ?? '',
+    telefono_principal: entidad.telefono_principal ?? '',
+    sitio_web: entidad.sitio_web ?? '',
+    observaciones: entidad.observaciones ?? '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const guardar = async () => {
+    setLoading(true);
+    setError(null);
+    // '' → null en los seis campos: correoSchema es .email() y siglasSchema
+    // exige 2-12 caracteres — un '' enviado tal cual haría fallar el PATCH
+    // completo con "Correo electrónico inválido" en vez de limpiar el campo.
+    const limpiar = (v: string) => (v.trim() === '' ? null : v.trim());
+    const payload = {
+      siglas: limpiar(form.siglas),
+      nombre_comercial: limpiar(form.nombre_comercial),
+      correo_principal: limpiar(form.correo_principal),
+      telefono_principal: limpiar(form.telefono_principal),
+      sitio_web: limpiar(form.sitio_web),
+      observaciones: limpiar(form.observaciones),
+    };
+    const res = await fetch(`/api/entidades/${entidad.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setLoading(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'Error al guardar');
+      return;
+    }
+    setEditando(false);
+    window.location.reload();
+  };
+
+  return (
+    <div className="bg-rtb-surface/60 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-rtb-navy-mid uppercase tracking-wider">Datos generales</h3>
+        {puedeEditar && !editando && (
+          <button type="button" onClick={() => setEditando(true)} className="text-rtb-teal">
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-destructive mb-2">{error}</p>}
+
+      {editando ? (
+        <div className="space-y-2.5">
+          <CampoEdicion label="Siglas">
+            <Input
+              value={form.siglas}
+              onChange={(e) => setForm((f) => ({ ...f, siglas: e.target.value }))}
+              maxLength={12}
+              style={{ textTransform: 'uppercase' }}
+            />
+          </CampoEdicion>
+          <CampoEdicion label="Nombre comercial">
+            <Input
+              value={form.nombre_comercial}
+              onChange={(e) => setForm((f) => ({ ...f, nombre_comercial: e.target.value }))}
+            />
+          </CampoEdicion>
+          <CampoEdicion label="Correo">
+            <Input
+              type="email"
+              value={form.correo_principal}
+              onChange={(e) => setForm((f) => ({ ...f, correo_principal: e.target.value }))}
+            />
+          </CampoEdicion>
+          <CampoEdicion label="Teléfono">
+            <Input
+              value={form.telefono_principal}
+              onChange={(e) => setForm((f) => ({ ...f, telefono_principal: e.target.value }))}
+            />
+          </CampoEdicion>
+          <CampoEdicion label="Sitio web">
+            <Input value={form.sitio_web} onChange={(e) => setForm((f) => ({ ...f, sitio_web: e.target.value }))} />
+          </CampoEdicion>
+          <CampoEdicion label="Observaciones">
+            <textarea
+              value={form.observaciones}
+              onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))}
+              className="w-full text-sm border border-border rounded-lg px-2 py-1.5 min-h-[70px]"
+            />
+          </CampoEdicion>
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" onClick={guardar} disabled={loading} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+              {loading && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              Guardar
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setEditando(false)}>
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <Dato label="Siglas" valor={entidad.siglas ?? '—'} />
+          <Dato label="Nombre comercial" valor={entidad.nombre_comercial ?? '—'} />
+          <Dato label="Correo" valor={entidad.correo_principal ?? '—'} />
+          <Dato label="Teléfono" valor={entidad.telefono_principal ?? '—'} />
+          <Dato label="Sitio web" valor={entidad.sitio_web ?? '—'} />
+          <Dato label="Fecha de alta" valor={new Date(entidad.created_at).toLocaleDateString('es-MX', { timeZone: 'UTC' })} />
+          <div className="pt-1">
+            <dt className="text-xs text-muted-foreground">Observaciones</dt>
+            <dd className="text-sm text-rtb-navy">{entidad.observaciones ?? '—'}</dd>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CampoEdicion({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-xs text-muted-foreground">{label}</label>
+      <div className="mt-0.5">{children}</div>
+    </div>
+  );
+}
+
 function Card({ titulo, children }: { titulo: string; children: React.ReactNode }) {
   return (
     <div className="bg-rtb-surface/60 rounded-xl p-4">
@@ -305,13 +527,17 @@ function CuentasBancarias({ proveedorId }: { proveedorId: string }) {
   const [enmascarado, setEnmascarado] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Gap de UI (contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4): POST
+  // /api/proveedores/[id]/cuentas y la URL firmada de subida
+  // (.../comprobante-upload-url, bucket privado 'comprobantes-bancarios')
+  // ya existían — nunca hubo formulario que los llamara.
+  const [creando, setCreando] = useState(false);
 
-  useEffect(() => {
-    let cancelado = false;
+  const cargar = () => {
+    setLoading(true);
     fetch(`/api/proveedores/${proveedorId}/cuentas`)
       .then(async (r) => {
         const json = await r.json();
-        if (cancelado) return;
         // No dar por buena una respuesta con error sólo porque .json() no
         // lanzó — un fallo silencioso ya pasó una vez en este módulo
         // (audit_log sin GRANT SELECT, ver contexto/AUDITORIA_RTB-ENT-01.md).
@@ -322,12 +548,11 @@ function CuentasBancarias({ proveedorId }: { proveedorId: string }) {
         setData(json.data ?? []);
         setEnmascarado(json.enmascarado ?? true);
       })
-      .catch(() => !cancelado && setError('Error de conexión'))
-      .finally(() => !cancelado && setLoading(false));
-    return () => {
-      cancelado = true;
-    };
-  }, [proveedorId]);
+      .catch(() => setError('Error de conexión'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(cargar, [proveedorId]);
 
   if (!puede(role, 'cuentas_bancarias', 'select') && role !== 'direccion') {
     return <p className="text-sm text-muted-foreground">No tienes acceso a esta información (P03).</p>;
@@ -336,12 +561,34 @@ function CuentasBancarias({ proveedorId }: { proveedorId: string }) {
   if (loading) return <p className="text-sm text-muted-foreground">Cargando…</p>;
   if (error) return <p className="text-sm text-destructive">{error}</p>;
 
+  const puedeCrear = puede(role, 'cuentas_bancarias', 'insert');
+
   return (
     <div className="bg-white rounded-xl p-5" style={{ boxShadow: 'var(--shadow-sm)' }}>
-      <div className="flex items-center gap-2 mb-4 text-xs text-muted-foreground">
-        <Lock className="w-3.5 h-3.5 text-accent" />
-        {enmascarado ? 'CLABE enmascarada — acceso restringido (P03 §II)' : 'Acceso completo (finanzas / super_admin)'}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Lock className="w-3.5 h-3.5 text-accent" />
+          {enmascarado ? 'CLABE enmascarada — acceso restringido (P03 §II)' : 'Acceso completo (finanzas / super_admin)'}
+        </div>
+        {puedeCrear && !creando && (
+          <Button size="sm" onClick={() => setCreando(true)}>
+            {data.some((c) => c.estado === 'activa') ? 'Reemplazar cuenta' : 'Nueva cuenta'}
+          </Button>
+        )}
       </div>
+
+      {creando && (
+        <CuentaBancariaForm
+          proveedorId={proveedorId}
+          exigeMotivo={data.some((c) => c.estado === 'activa')}
+          onClose={() => setCreando(false)}
+          onCreada={() => {
+            setCreando(false);
+            cargar();
+          }}
+        />
+      )}
+
       {data.length === 0 && <p className="text-sm text-muted-foreground">Sin cuentas bancarias registradas.</p>}
       {data.map((c) => (
         <div key={c.id} className="text-sm py-2 border-b border-border/50 last:border-0 flex items-center justify-between">
@@ -356,6 +603,139 @@ function CuentasBancarias({ proveedorId }: { proveedorId: string }) {
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function CuentaBancariaForm({
+  proveedorId,
+  exigeMotivo,
+  onClose,
+  onCreada,
+}: {
+  proveedorId: string;
+  exigeMotivo: boolean;
+  onClose: () => void;
+  onCreada: () => void;
+}) {
+  const [banco, setBanco] = useState('');
+  const [clabe, setClabe] = useState('');
+  const [titular, setTitular] = useState('');
+  const [rfcBeneficiario, setRfcBeneficiario] = useState('');
+  const [motivoCambio, setMotivoCambio] = useState('');
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const enviar = async () => {
+    if (!archivo) {
+      setError('Adjunta el comprobante (PDF, JPG o PNG).');
+      return;
+    }
+    setError(null);
+    setEnviando(true);
+    try {
+      const resUrl = await fetch(`/api/proveedores/${proveedorId}/cuentas/comprobante-upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombreArchivo: archivo.name }),
+      });
+      const dataUrl = await resUrl.json().catch(() => ({}));
+      if (!resUrl.ok) {
+        setError(dataUrl?.error ?? 'No se pudo iniciar la subida del comprobante.');
+        setEnviando(false);
+        return;
+      }
+
+      const supabase = createSupabaseBrowserClient();
+      const { error: uploadError } = await supabase.storage
+        .from('comprobantes-bancarios')
+        .uploadToSignedUrl(dataUrl.path, dataUrl.token, archivo);
+      if (uploadError) {
+        setError('No se pudo subir el comprobante: ' + uploadError.message);
+        setEnviando(false);
+        return;
+      }
+
+      const res = await fetch(`/api/proveedores/${proveedorId}/cuentas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          banco,
+          clabe,
+          titular,
+          rfc_beneficiario: rfcBeneficiario,
+          comprobante_path: dataUrl.path,
+          motivo_cambio: motivoCambio || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setEnviando(false);
+      if (!res.ok) {
+        setError(data?.error ?? 'No se pudo registrar la cuenta.');
+        return;
+      }
+      onCreada();
+    } catch {
+      setError('Error de conexión.');
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div className="mb-4 p-3 bg-rtb-surface/60 rounded-lg space-y-2">
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {exigeMotivo && (
+        <p className="text-xs text-accent">
+          Ya existe una cuenta activa — esta la reemplaza. Indica el motivo abajo (obligatorio).
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className="text-xs">Banco</Label>
+          <Input value={banco} onChange={(e) => setBanco(e.target.value)} />
+        </div>
+        <div>
+          <Label className="text-xs">CLABE</Label>
+          <Input value={clabe} onChange={(e) => setClabe(e.target.value)} className="tabular-nums" maxLength={18} />
+        </div>
+        <div>
+          <Label className="text-xs">Titular (beneficiario)</Label>
+          <Input value={titular} onChange={(e) => setTitular(e.target.value)} />
+        </div>
+        <div>
+          <Label className="text-xs">RFC del beneficiario</Label>
+          <Input value={rfcBeneficiario} onChange={(e) => setRfcBeneficiario(e.target.value.toUpperCase())} className="tabular-nums" />
+        </div>
+      </div>
+      <div>
+        <Label className="text-xs">Comprobante (PDF, JPG o PNG)</Label>
+        <input
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png"
+          onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
+          className="mt-1 w-full text-xs"
+        />
+      </div>
+      {exigeMotivo && (
+        <div>
+          <Label className="text-xs">Motivo del reemplazo</Label>
+          <Input value={motivoCambio} onChange={(e) => setMotivoCambio(e.target.value)} />
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={onClose}>
+          Cancelar
+        </Button>
+        <Button
+          size="sm"
+          onClick={enviar}
+          disabled={enviando || !banco || !clabe || !titular || !rfcBeneficiario || !archivo || (exigeMotivo && !motivoCambio)}
+        >
+          {enviando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+          Guardar
+        </Button>
+      </div>
     </div>
   );
 }

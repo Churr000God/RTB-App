@@ -62,7 +62,11 @@ const NOMBRE = (maxLength: number): CampoCatalogo => ({
   tipo: 'texto',
   requerido: true,
   maxLength,
-  enTabla: true,
+  // Sin enTabla (E-09, contexto/AUDITORIA_QA_ROLES_2026-08-06.md): la
+  // tabla genérica (catalogo-tabla.tsx) ya pinta una columna "Nombre" fija
+  // para los 4 catálogos; enTabla:true aquí la duplicaba, siempre con el
+  // mismo valor. "Sale como columna del listado, además de clave/nombre"
+  // describía el campo `enTabla` en general, no que Nombre debiera usarlo.
 });
 
 const DESCRIPCION: CampoCatalogo = {

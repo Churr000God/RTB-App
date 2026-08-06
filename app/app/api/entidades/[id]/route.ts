@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { entidadUpdateLibreSchema, rfcSchema } from '@/lib/entidades/schemas';
+import { mensajeDuplicadoEntidad } from '@/lib/entidades/errores';
 
 // GET - detalle completo: entidad + extensión de rol + contactos/direcciones
 // activos + solicitudes de cambio pendientes.
@@ -99,8 +100,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     const client = sensiblesEnviados.length > 0 ? createSupabaseAdminClient() : createSupabaseServerClient();
     const { error } = await client.from('entidades').update(parsed.data).eq('id', params.id);
     if (error) {
-      const duplicado = /uq_entidades_rfc|duplicate key/i.test(error.message);
-      return NextResponse.json({ error: duplicado ? 'Ya existe una entidad con ese RFC.' : error.message }, { status: 400 });
+      return NextResponse.json({ error: mensajeDuplicadoEntidad(error.message) ?? error.message }, { status: 400 });
     }
 
     return NextResponse.json({ success: true });

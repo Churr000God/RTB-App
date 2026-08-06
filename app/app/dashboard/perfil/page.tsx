@@ -45,8 +45,11 @@ export default function ProfilePage() {
 
   const handleChangePassword = async () => {
     setPwMsg(null);
-    if ((newPassword?.length ?? 0) < 6) {
-      setPwMsg({ type: 'error', text: 'La contraseña debe tener al menos 6 caracteres.' });
+    // M-04 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): 6 no coincidía con
+    // el mínimo real de 8 que exige la creación de usuario
+    // (api/admin/users/route.ts) — se unifica en 8 en toda la app.
+    if ((newPassword?.length ?? 0) < 8) {
+      setPwMsg({ type: 'error', text: 'La contraseña debe tener al menos 8 caracteres.' });
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -133,7 +136,7 @@ export default function ProfilePage() {
               type="password"
               value={newPassword}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewPassword(e.target.value)}
-              placeholder="Mínimo 6 caracteres"
+              placeholder="Mínimo 8 caracteres"
             />
           </div>
           <div>

@@ -18,6 +18,19 @@ import type {
  *  normativo (ver contexto/AUDITORIA_RTB-ENT-01.md, hallazgo 13). */
 export const UMBRAL_APROBACION_CREDITO = 100_000;
 
+/** Espejo de CambioControlado (lib/entidades/permisos.ts) — para la
+ *  pantalla de solicitudes de cambio (gap de UI,
+ *  contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4). */
+export const CAMBIO_CONTROLADO_LABELS: Record<string, string> = {
+  rfc: 'RFC',
+  razon_social: 'Razón social',
+  limite_credito: 'Límite de crédito',
+  condicion_proveedor: 'Condición de proveedor',
+  reactivacion: 'Reactivación',
+  bloqueo_temporal: 'Bloqueo temporal',
+  bloqueo_permanente: 'Bloqueo permanente',
+};
+
 export const ENTIDAD_ESTADO_LABELS: Record<EntidadEstado, string> = {
   borrador: 'Borrador',
   activo: 'Activo',

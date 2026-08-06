@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { productoCreateSchema } from '@/lib/inventario/schemas';
+import { adjuntarImagenPrincipal } from '@/lib/inventario/imagenes';
 
 const PAGE_SIZE = 20;
 
@@ -57,6 +58,8 @@ export async function GET(request: Request) {
     const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+    const dataConImagen = await adjuntarImagenPrincipal(supabase, data ?? []);
+
     const [total, activos, requierenDepuracion, sinUbicacion, sinCosto] = await Promise.all([
       supabase.from('productos').select('id', { count: 'exact', head: true }).neq('estado', 'fusionado'),
       supabase.from('productos').select('id', { count: 'exact', head: true }).eq('estado', 'activo'),
@@ -74,7 +77,7 @@ export async function GET(request: Request) {
     ]);
 
     return NextResponse.json({
-      data: data ?? [],
+      data: dataConImagen,
       count: count ?? 0,
       page,
       pageSize: PAGE_SIZE,

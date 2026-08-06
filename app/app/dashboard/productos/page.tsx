@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { requireActiveUser } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { adjuntarImagenPrincipal } from '@/lib/inventario/imagenes';
 import { ProductosExplorer } from './productos-explorer';
 
 const PAGE_SIZE = 20;
@@ -27,9 +28,11 @@ export default async function ProductosPage() {
     supabase.from('inventario_existencias').select('id', { count: 'exact', head: true }).is('costo_promedio', null).neq('cantidad_teorica', 0),
   ]);
 
+  const dataConImagen = await adjuntarImagenPrincipal(supabase, data ?? []);
+
   return (
     <ProductosExplorer
-      initialData={data ?? []}
+      initialData={dataConImagen}
       initialCount={count ?? 0}
       pageSize={PAGE_SIZE}
       kpis={{

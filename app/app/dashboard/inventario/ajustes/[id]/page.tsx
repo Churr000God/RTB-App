@@ -3,16 +3,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/rbac/hooks';
+import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AjusteEstadoBadge } from '@/components/inventario/estado-badge';
+import { ProductoCombobox } from '@/components/inventario/producto-combobox';
+import { UbicacionSelect } from '@/components/inventario/ubicacion-select';
 import { AJUSTE_TIPO_LABELS } from '@/lib/inventario/config';
 import { ROLES_AUTORIZAN_AJUSTES } from '@/lib/inventario/permisos';
-import { ArrowLeft, AlertCircle, FileEdit, Loader2, Plus, Send, ShieldCheck, Zap } from 'lucide-react';
+import { ArrowLeft, AlertCircle, FileEdit, Loader2, Paperclip, Plus, Send, ShieldCheck, Zap } from 'lucide-react';
 import type { InventarioAjuste, InventarioAjusteLinea } from '@/types/inventario';
 
-type Linea = InventarioAjusteLinea & { productos: { codigo_interno: string; nombre: string } | null };
+type Linea = InventarioAjusteLinea & {
+  productos: { codigo_interno: string; nombre: string } | null;
+  ubicaciones_internas: { codigo: string; nombre: string } | null;
+};
 
 export default function AjusteDetallePage({ params }: { params: { id: string } }) {
   const { role, user } = useAuth();
@@ -21,11 +27,16 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [productoId, setProductoId] = useState('');
-  const [ubicacionId, setUbicacionId] = useState('');
+  // M-03 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): "Producto ID"/
+  // "Ubicación ID" eran <Input> de texto libre pidiendo un UUID pegado a
+  // mano, sin ningún lugar de la app que lo mostrara para copiarlo.
+  const [productoId, setProductoId] = useState<string | null>(null);
+  const [ubicacionId, setUbicacionId] = useState<string | null>(null);
   const [cantidad, setCantidad] = useState('');
   const [costoUnitario, setCostoUnitario] = useState('');
   const [soportePath, setSoportePath] = useState('');
+  const [archivoSoporte, setArchivoSoporte] = useState<File | null>(null);
+  const [subiendoSoporte, setSubiendoSoporte] = useState(false);
   const [comentario, setComentario] = useState('');
   const [motivoRechazo, setMotivoRechazo] = useState('');
 
@@ -61,7 +72,43 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
     return true;
   };
 
-  const guardarSoporte = () => void accion(`/api/inventario/ajustes/${params.id}`, 'PATCH', { soporte_path: soportePath || undefined });
+  // Gap de UI (contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4): antes era un
+  // <Input> de texto libre para pegar una ruta a mano. Sube de verdad al
+  // bucket privado 'soportes-inventario' vía URL firmada (mismo patrón que
+  // comprobante-upload-url de RTB-ENT-01) y sólo entonces guarda la ruta.
+  const subirSoporte = async () => {
+    if (!archivoSoporte) return;
+    setError(null);
+    setSubiendoSoporte(true);
+    try {
+      const resUrl = await fetch(`/api/inventario/ajustes/${params.id}/soporte-upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombreArchivo: archivoSoporte.name }),
+      });
+      const dataUrl = await resUrl.json().catch(() => ({}));
+      if (!resUrl.ok) {
+        setError(dataUrl?.error ?? 'No se pudo iniciar la subida del soporte.');
+        setSubiendoSoporte(false);
+        return;
+      }
+      const supabase = createSupabaseBrowserClient();
+      const { error: uploadError } = await supabase.storage
+        .from('soportes-inventario')
+        .uploadToSignedUrl(dataUrl.path, dataUrl.token, archivoSoporte);
+      if (uploadError) {
+        setError('No se pudo subir el archivo: ' + uploadError.message);
+        setSubiendoSoporte(false);
+        return;
+      }
+      setSubiendoSoporte(false);
+      const ok = await accion(`/api/inventario/ajustes/${params.id}`, 'PATCH', { soporte_path: dataUrl.path });
+      if (ok) setArchivoSoporte(null);
+    } catch {
+      setError('Error de conexión.');
+      setSubiendoSoporte(false);
+    }
+  };
   const agregarLinea = async () => {
     const ok = await accion(`/api/inventario/ajustes/${params.id}/lineas`, 'POST', {
       producto_id: productoId,
@@ -70,8 +117,8 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
       costo_unitario: costoUnitario ? Number(costoUnitario) : undefined,
     });
     if (ok) {
-      setProductoId('');
-      setUbicacionId('');
+      setProductoId(null);
+      setUbicacionId(null);
       setCantidad('');
       setCostoUnitario('');
     }
@@ -127,9 +174,20 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
       {esSolicitante && ajuste.estado === 'borrador' && (
         <div className="bg-white rounded-xl p-5 space-y-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
           <h2 className="text-sm font-display font-semibold text-rtb-navy">Soporte documental</h2>
-          <Input value={soportePath} onChange={(e) => setSoportePath(e.target.value)} placeholder="Ruta del archivo en el bucket soportes-inventario" />
-          <Button size="sm" variant="outline" onClick={guardarSoporte}>
-            Guardar ruta de soporte
+          {soportePath && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Paperclip className="w-3.5 h-3.5" /> Soporte cargado: {soportePath.split('/').pop()}
+            </p>
+          )}
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png"
+            onChange={(e) => setArchivoSoporte(e.target.files?.[0] ?? null)}
+            className="text-xs"
+          />
+          <Button size="sm" variant="outline" onClick={subirSoporte} disabled={!archivoSoporte || subiendoSoporte}>
+            {subiendoSoporte && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+            {soportePath ? 'Reemplazar soporte' : 'Subir soporte'}
           </Button>
         </div>
       )}
@@ -140,6 +198,7 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
           <thead>
             <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider">
               <th className="py-2 px-4">Producto</th>
+              <th className="py-2 px-4">Ubicación</th>
               <th className="py-2 px-4 text-right">Cantidad</th>
               <th className="py-2 px-4 text-right">Costo unitario</th>
             </tr>
@@ -148,6 +207,9 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
             {lineas.map((l) => (
               <tr key={l.id} className="border-t border-border/50">
                 <td className="py-2 px-4 text-sm">{l.productos?.nombre ?? l.producto_id}</td>
+                <td className="py-2 px-4 text-sm text-muted-foreground">
+                  {l.ubicaciones_internas ? `${l.ubicaciones_internas.codigo} — ${l.ubicaciones_internas.nombre}` : '—'}
+                </td>
                 <td className={`py-2 px-4 text-right tabular-nums text-sm ${Number(l.cantidad_ajuste) < 0 ? 'text-destructive' : 'text-primary'}`}>
                   {Number(l.cantidad_ajuste) > 0 ? '+' : ''}
                   {l.cantidad_ajuste}
@@ -157,7 +219,7 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
             ))}
             {lineas.length === 0 && (
               <tr>
-                <td colSpan={3} className="py-6 text-center text-muted-foreground text-sm">
+                <td colSpan={4} className="py-6 text-center text-muted-foreground text-sm">
                   Sin líneas todavía.
                 </td>
               </tr>
@@ -168,12 +230,16 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
         {esSolicitante && ajuste.estado === 'borrador' && (
           <div className="flex flex-wrap gap-2 items-end p-4 border-t border-border">
             <div>
-              <Label className="text-xs">Producto ID</Label>
-              <Input value={productoId} onChange={(e) => setProductoId(e.target.value)} className="w-56" />
+              <Label className="text-xs">Producto</Label>
+              <div className="mt-1">
+                <ProductoCombobox value={productoId} onChange={(id) => setProductoId(id)} />
+              </div>
             </div>
             <div>
-              <Label className="text-xs">Ubicación ID (opcional)</Label>
-              <Input value={ubicacionId} onChange={(e) => setUbicacionId(e.target.value)} className="w-56" />
+              <Label className="text-xs">Ubicación (opcional)</Label>
+              <div className="mt-1">
+                <UbicacionSelect value={ubicacionId} onChange={setUbicacionId} />
+              </div>
             </div>
             <div>
               <Label className="text-xs">Cantidad (signada)</Label>

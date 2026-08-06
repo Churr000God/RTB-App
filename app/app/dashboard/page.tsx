@@ -38,8 +38,14 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick stats */}
+      {/* "Módulos Activos: 6" contaba exactamente los módulos que la
+          cuadrícula de abajo marca "Próximamente" — ninguno de los 6
+          existe todavía (bonus hallado junto a E-11,
+          contexto/AUDITORIA_QA_ROLES_2026-08-06.md). El número real de
+          módulos planificados sí es 6 (MODULE_CARDS.length, no un literal
+          suelto), así que se corrige la etiqueta, no el valor. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={LayoutDashboard} label="Módulos Activos" value="6" />
+        <StatCard icon={LayoutDashboard} label="Módulos Planificados" value={String(MODULE_CARDS.length)} />
         <StatCard icon={Users} label="Usuarios" value="—" />
         <StatCard icon={ShoppingCart} label="Pedidos Hoy" value="—" />
         <StatCard icon={Package} label="Productos" value="—" />

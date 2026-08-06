@@ -25,6 +25,18 @@ export const UMBRAL_EXACTITUD = 95.0;
  *  "stock real > 0 y más de 180 días sin movimiento" → bloqueo de compra. */
 export const DIAS_SIN_MOVIMIENTO_UMBRAL = 180;
 
+// ---------- Imágenes de producto (021_producto_imagenes.sql) ----------
+
+/** Bucket PÚBLICO — a diferencia de comprobantes-bancarios/soportes-inventario. */
+export const IMAGEN_BUCKET = 'productos-imagenes';
+export const IMAGEN_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+/** Espejo de prod_img_bytes_chk y del file_size_limit del bucket (021). */
+export const IMAGEN_BYTES_MAX = 5 * 1024 * 1024;
+export const IMAGEN_LADO_MAX = 1600;
+export const MINIATURA_LADO_MAX = 400;
+/** Tope de negocio, aplicado en la API — un CHECK no puede contar filas hermanas. */
+export const IMAGENES_MAX_POR_PRODUCTO = 10;
+
 export const UNIDAD_TIPO_LABELS: Record<UnidadTipo, string> = {
   conteo: 'Conteo',
   agrupacion: 'Agrupación',
@@ -115,6 +127,39 @@ export const CONTEO_ESTADO_TONO: Record<ConteoEstado, 'activo' | 'pendiente' | '
   aplicado: 'activo',
   cancelado: 'inactivo',
 };
+
+/** Espejo EXACTO del GRANT SELECT por columna de inventario_conteo_detalles
+ *  (012_inventario_conteos.sql:576-581). Deliberadamente sin cantidad_teorica/
+ *  diferencia/valor_diferencia/costo_unitario_snapshot/costo_origen/created_by/
+ *  updated_by — es la vista ciega real, un privilegio de Postgres, no un
+ *  filtro de pantalla. Un `select('*')` contra esta tabla exige SELECT sobre
+ *  TODAS las columnas y falla con `42501 permission denied for table` para
+ *  cualquier rol (E-02, contexto/AUDITORIA_QA_ROLES_2026-08-06.md) — el
+ *  fix no es ampliar el GRANT (eso expondría el teórico al capturista),
+ *  es no pedir columnas que el rol no tiene. */
+export const CONTEO_DETALLE_COLUMNAS_CAPTURA = [
+  'id',
+  'conteo_id',
+  'producto_id',
+  'ubicacion_id',
+  'unidad_base_id',
+  'contenido_por_unidad_snapshot',
+  'estado_conteo',
+  'cantidad_fisica',
+  'unidad_captura_id',
+  'cantidad_capturada',
+  'contado_por',
+  'contado_at',
+  'ubicacion_contada_id',
+  'cantidad_fisica_recuento',
+  'recontado_por',
+  'recontado_at',
+  'solicitud_compra_folio',
+  'cantidad_en_transito',
+  'observaciones',
+  'created_at',
+  'updated_at',
+].join(', ');
 
 /** Transiciones válidas — espejo EXACTO de la máquina de estados en
  *  inventario_conteos_before_update() (012_inventario_conteos.sql). Sólo
@@ -230,4 +275,11 @@ export const HALLAZGO_ESTADO_LABELS: Record<HallazgoEstado, string> = {
   en_seguimiento: 'En seguimiento',
   cerrado_con_causa: 'Cerrado (con causa)',
   cerrado_sin_causa: 'Cerrado (sin causa)',
+};
+
+export const HALLAZGO_ESTADO_TONO: Record<HallazgoEstado, 'activo' | 'pendiente' | 'inactivo' | 'bloqueado'> = {
+  abierto: 'bloqueado',
+  en_seguimiento: 'pendiente',
+  cerrado_con_causa: 'activo',
+  cerrado_sin_causa: 'inactivo',
 };

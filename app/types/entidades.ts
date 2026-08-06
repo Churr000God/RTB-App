@@ -72,6 +72,7 @@ export interface Entidad {
   clave: string;
   nombre_legal: string;
   nombre_comercial: string | null;
+  siglas: string | null;
   tipo: EntidadTipo;
   persona_tipo: PersonaTipo;
   rfc: string | null;
@@ -217,6 +218,7 @@ export interface SolicitudCambio {
   id: string;
   tabla: string;
   registro_id: string;
+  tipo_cambio: string;
   cambios: Record<string, unknown>;
   motivo: string;
   solicitante_id: string;

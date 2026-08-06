@@ -1,16 +1,20 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/lib/rbac/hooks';
 import { DiscrepanciaEstadoBadge } from '@/components/inventario/estado-badge';
 import { Button } from '@/components/ui/button';
+import { ProductoCombobox } from '@/components/inventario/producto-combobox';
+import { UbicacionSelect } from '@/components/inventario/ubicacion-select';
 import {
   DISCREPANCIA_BANDA_LABELS,
   DISCREPANCIA_SALIDA_LABELS,
   DISCREPANCIA_SALIDAS_SIN_CAUSA,
 } from '@/lib/inventario/config';
+import { puede } from '@/lib/inventario/permisos';
 import { DISCREPANCIA_BANDAS, DISCREPANCIA_SALIDAS } from '@/types/inventario';
 import type { DiscrepanciaBanda, DiscrepanciaSalida, InventarioDiscrepancia } from '@/types/inventario';
-import { AlertCircle, AlertTriangle, Loader2, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Loader2, Plus, X } from 'lucide-react';
 
 type Fila = InventarioDiscrepancia & { productos: { codigo_interno: string; nombre: string } | null };
 
@@ -19,10 +23,15 @@ type Fila = InventarioDiscrepancia & { productos: { codigo_interno: string; nomb
 // resolución sólo deja mandar sin causa/banda cuando la salida es HAL o
 // MEN (mismo espejo que dis_causa_chk en 013_inventario_discrepancias_ajustes.sql).
 export default function DiscrepanciasPage() {
+  const { role } = useAuth();
   const [data, setData] = useState<Fila[]>([]);
   const [kpis, setKpis] = useState({ abiertas: 0 });
   const [loading, setLoading] = useState(true);
   const [seleccionada, setSeleccionada] = useState<Fila | null>(null);
+  // Gap de UI (contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4): POST
+  // /api/inventario/discrepancias existía y respondía, pero esta pantalla
+  // sólo listaba — nunca la invocaba ningún componente.
+  const [creando, setCreando] = useState(false);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -39,11 +48,18 @@ export default function DiscrepanciasPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-2">
-          <AlertTriangle className="w-6 h-6" /> Registro de Discrepancias
-        </h1>
-        <p className="text-muted-foreground mt-1">CIE-DIS-01 · Paso 0 · Reubicación, causa presunta y banda de investigación</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-2">
+            <AlertTriangle className="w-6 h-6" /> Registro de Discrepancias
+          </h1>
+          <p className="text-muted-foreground mt-1">CIE-DIS-01 · Paso 0 · Reubicación, causa presunta y banda de investigación</p>
+        </div>
+        {puede(role, 'discrepancias', 'insert') && (
+          <Button onClick={() => setCreando(true)} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            <Plus className="w-4 h-4 mr-2" /> Nueva discrepancia
+          </Button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl p-4 border-l-4 border-l-destructive w-fit" style={{ boxShadow: 'var(--shadow-sm)' }}>
@@ -113,6 +129,145 @@ export default function DiscrepanciasPage() {
           }}
         />
       )}
+
+      {creando && (
+        <CrearModal
+          onClose={() => setCreando(false)}
+          onCreada={() => {
+            setCreando(false);
+            void cargar();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CrearModal({ onClose, onCreada }: { onClose: () => void; onCreada: () => void }) {
+  const [productoId, setProductoId] = useState<string | null>(null);
+  const [ubicacionId, setUbicacionId] = useState<string | null>(null);
+  const [cantidadTeorica, setCantidadTeorica] = useState('');
+  const [cantidadFisica, setCantidadFisica] = useState('');
+  const [costoUnitario, setCostoUnitario] = useState('');
+  const [causaPresunta, setCausaPresunta] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const enviar = async () => {
+    setError(null);
+    setLoading(true);
+    const res = await fetch('/api/inventario/discrepancias', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        producto_id: productoId,
+        ubicacion_id: ubicacionId || undefined,
+        cantidad_teorica: Number(cantidadTeorica),
+        cantidad_fisica: Number(cantidadFisica),
+        costo_unitario_snapshot: costoUnitario ? Number(costoUnitario) : undefined,
+        causa_presunta: causaPresunta || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setLoading(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'Error al registrar la discrepancia');
+      return;
+    }
+    onCreada();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl p-6 max-w-lg w-full space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-display font-semibold text-rtb-navy">Nueva discrepancia</h2>
+          <button onClick={onClose}>
+            <X className="w-5 h-5 text-muted-foreground" />
+          </button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Para diferencias detectadas fuera de un conteo formal (p.ej. en piso). Nace "abierta", sin resolución —
+          se investiga desde "Investigar" en la lista.
+        </p>
+
+        {error && (
+          <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div>
+          <label className="text-xs font-semibold text-rtb-navy-mid">Producto</label>
+          <div className="mt-1">
+            <ProductoCombobox value={productoId} onChange={(id) => setProductoId(id)} />
+          </div>
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-rtb-navy-mid">Ubicación (opcional)</label>
+          <div className="mt-1">
+            <UbicacionSelect value={ubicacionId} onChange={setUbicacionId} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-rtb-navy-mid">Cantidad teórica</label>
+            <input
+              type="number"
+              step="any"
+              value={cantidadTeorica}
+              onChange={(e) => setCantidadTeorica(e.target.value)}
+              className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2 tabular-nums"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-rtb-navy-mid">Cantidad física</label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={cantidadFisica}
+              onChange={(e) => setCantidadFisica(e.target.value)}
+              className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2 tabular-nums"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-rtb-navy-mid">Costo unitario (opcional)</label>
+          <input
+            type="number"
+            step="any"
+            min="0"
+            value={costoUnitario}
+            onChange={(e) => setCostoUnitario(e.target.value)}
+            className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2 tabular-nums"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-rtb-navy-mid">Causa presunta (opcional)</label>
+          <textarea
+            value={causaPresunta}
+            onChange={(e) => setCausaPresunta(e.target.value)}
+            rows={2}
+            className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
+          />
+        </div>
+
+        <div className="flex gap-2">
+          <Button
+            onClick={enviar}
+            disabled={loading || !productoId || !cantidadTeorica || !cantidadFisica}
+            className="bg-rtb-teal hover:bg-rtb-teal/90 text-white"
+          >
+            {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            Registrar
+          </Button>
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

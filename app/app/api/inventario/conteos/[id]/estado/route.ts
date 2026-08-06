@@ -24,6 +24,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (estado === 'congelado') {
       return NextResponse.json({ error: 'Usa /congelar para pasar a congelado.' }, { status: 400 });
     }
+    // E-04: este endpoint es genérico (super_admin/direccion/almacen) — sin
+    // este rechazo, almacen podía "aplicar" un conteo por esta puerta
+    // aunque /aplicar exija super_admin/direccion. inventario_aplicar_conteo()
+    // (016) ya bloquea el rol también a nivel de función, esto es además
+    // para que el error sea claro antes del round-trip.
+    if (estado === 'aplicado') {
+      return NextResponse.json({ error: 'Usa /aplicar para pasar a aplicado.' }, { status: 400 });
+    }
 
     const supabase = createSupabaseServerClient();
 

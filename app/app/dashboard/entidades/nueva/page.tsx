@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/rbac/hooks';
@@ -30,6 +30,7 @@ const initialForm = {
   persona_tipo: 'moral' as PersonaTipo,
   nombre_legal: '',
   nombre_comercial: '',
+  siglas: '',
   rfc: '',
   curp: '',
   correo_principal: '',
@@ -54,7 +55,12 @@ const initialForm = {
   numero_exterior: '',
   colonia: '',
   ciudad: '',
-  entidad_federativa: '',
+  // E-10/M-07 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): antes era ''
+  // con placeholder "Jalisco" — parecía prellenado sin estarlo, y el envío
+  // fallaba con "El estado es obligatorio" en cuanto se tocaba cualquier
+  // otro campo de la dirección. La mayoría de las direcciones de RTB están
+  // en Jalisco, así que ahora es un valor real de partida, editable.
+  entidad_federativa: 'Jalisco',
   codigo_postal: '',
 };
 
@@ -81,6 +87,23 @@ export default function NuevaEntidadPage() {
     return ENTIDAD_TIPOS;
   }, [role]);
 
+  // E-06 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): el estado inicial
+  // (arriba) siempre arranca en 'cliente' sin conocer el rol todavía
+  // (useAuth() resuelve async). Para 'compras', que no puede dar de alta
+  // clientes, el <select> ya filtra esa opción y el navegador cae a la
+  // primera disponible ("Proveedor") — pero form.tipo seguía en 'cliente'
+  // hasta el primer onChange, así que encabezado/resumen/sección
+  // comercial mostraban "Cliente" mientras el select mostraba
+  // "Proveedor", y el envío sin tocar el selector fallaba 403. En cuanto
+  // el rol resuelve, si el tipo actual ya no está entre las opciones del
+  // rol, se corrige al primero disponible — sin tocar nada más del form.
+  useEffect(() => {
+    if (tiposDisponibles.length > 0 && !tiposDisponibles.includes(form.tipo)) {
+      setForm((f) => ({ ...f, tipo: tiposDisponibles[0] }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tiposDisponibles]);
+
   const progreso = useMemo(() => {
     const campos = [form.nombre_legal, form.rfc, form.contacto_nombre, form.calle, form.codigo_postal, form.ciudad];
     const llenos = campos.filter((c) => c.trim().length > 0).length;
@@ -96,6 +119,7 @@ export default function NuevaEntidadPage() {
         persona_tipo: form.persona_tipo,
         nombre_legal: form.nombre_legal,
         nombre_comercial: form.nombre_comercial || undefined,
+        siglas: form.siglas || undefined,
         rfc: form.rfc || undefined,
         curp: form.persona_tipo === 'fisica' ? form.curp || undefined : undefined,
         correo_principal: form.correo_principal || undefined,
@@ -149,6 +173,14 @@ export default function NuevaEntidadPage() {
         return;
       }
 
+      // E-07: el aviso de aprobación ahora corresponde con lo que
+      // realmente pasó — el servidor creó el cliente con crédito 0 y dejó
+      // el valor pedido pendiente en solicitudes_cambio (visible en el
+      // detalle de la entidad).
+      if (data.creditoPendiente) {
+        router.push(`/dashboard/entidades/${data.id}?creditoPendiente=${data.creditoPendiente}`);
+        return;
+      }
       router.push(`/dashboard/entidades/${data.id}`);
     } catch {
       setError('Error de conexión');
@@ -208,6 +240,15 @@ export default function NuevaEntidadPage() {
             </Campo>
             <Campo label="Nombre comercial">
               <Input value={form.nombre_comercial} onChange={set('nombre_comercial')} placeholder="Opcional" />
+            </Campo>
+            <Campo label="Siglas">
+              <Input
+                value={form.siglas}
+                onChange={set('siglas')}
+                placeholder="RTB"
+                maxLength={12}
+                style={{ textTransform: 'uppercase' }}
+              />
             </Campo>
             <Campo label="RFC">
               <Input value={form.rfc} onChange={set('rfc')} placeholder="XAXX010101000" className="tabular-nums" />
@@ -340,8 +381,10 @@ export default function NuevaEntidadPage() {
               <ShieldCheck className="w-4 h-4 text-rtb-teal" /> Alta y aprobación
             </h3>
             <p className="text-xs text-muted-foreground">
-              La entidad queda <span className="font-medium text-rtb-navy">activa de inmediato</span>. Sólo los
-              cambios sensibles (RFC, razón social, crédito sobre el umbral) requieren aprobación posterior.
+              La entidad queda <span className="font-medium text-rtb-navy">activa de inmediato</span>.
+              {requiereAprobacion
+                ? ' El cliente nace con crédito $0 — el límite pedido queda pendiente de aprobación de dirección.'
+                : ' Los cambios sensibles (RFC, razón social, crédito sobre el umbral) sí quedan pendientes de aprobación.'}
             </p>
           </div>
 

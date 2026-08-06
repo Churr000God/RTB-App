@@ -7,7 +7,8 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/rbac/hooks';
 import { Button } from '@/components/ui/button';
 import { ConteoEstadoBadge } from '@/components/inventario/estado-badge';
-import { CONTEO_LINEA_ESTADO_LABELS, CONTEO_TRANSICIONES, FIRMA_ROL_LABELS } from '@/lib/inventario/config';
+import { MotivoDialog } from '@/components/inventario/motivo-dialog';
+import { CONTEO_ESTADO_LABELS, CONTEO_LINEA_ESTADO_LABELS, CONTEO_TRANSICIONES, FIRMA_ROL_LABELS } from '@/lib/inventario/config';
 import { ROLES_FIRMAN_SUPERVISION } from '@/lib/inventario/permisos';
 import type {
   ConteoConciliacionFila,
@@ -18,7 +19,18 @@ import type {
   InventarioExactitudFila,
   FirmaRol,
 } from '@/types/inventario';
-import { AlertCircle, ArrowLeft, ClipboardCheck, Loader2, Lock, PenLine, Snowflake, Users } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  ClipboardCheck,
+  Loader2,
+  Lock,
+  PenLine,
+  Snowflake,
+  Unlock,
+  Users,
+} from 'lucide-react';
 
 interface Props {
   conteo: InventarioConteo;
@@ -32,6 +44,26 @@ interface Usuario {
   full_name: string;
 }
 
+interface OpcionAlcance {
+  id: string;
+  label: string;
+}
+
+// GET .../congelamientos (E-05/M-09): antes no había ninguna pantalla que
+// mostrara ni liberara un congelamiento — un conteo terminado dejaba el
+// producto/ubicación inmovilizado para siempre (016_qa_correcciones.sql
+// libera automático al aplicar/cancelar; esta sección cubre el resto de
+// los casos, p.ej. liberar antes de que el conteo termine).
+interface Congelamiento {
+  id: string;
+  ubicacion_id: string | null;
+  producto_id: string | null;
+  liberado_at: string | null;
+  motivo_liberacion: string | null;
+  ubicaciones_internas: { codigo: string; nombre: string } | null;
+  productos: { codigo_interno: string; nombre: string } | null;
+}
+
 export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, versionesIniciales }: Props) {
   const router = useRouter();
   const { role } = useAuth();
@@ -42,13 +74,36 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
   const [conciliacion, setConciliacion] = useState<ConteoConciliacionFila[]>([]);
   const [exactitud, setExactitud] = useState<InventarioExactitudFila[]>([]);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
+  const [congelamientos, setCongelamientos] = useState<Congelamiento[]>([]);
+  const [ubicaciones, setUbicaciones] = useState<OpcionAlcance[]>([]);
+  const [familias, setFamilias] = useState<OpcionAlcance[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // M-01 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): "Asignar capturista"
+  // usaba window.prompt pidiendo pegar un UUID a mano. Al reemplazarlo se
+  // encontró un bug de fondo, enmascarado por E-01/E-02 (nadie llegaba
+  // vivo hasta este botón): el POST mandaba `familia_id: null,
+  // ubicacion_id: null` siempre — pero asg_alcance_chk (012) exige uno de
+  // los dos no nulo, así que la asignación SIEMPRE habría fallado. Ahora
+  // el formulario pide un alcance real (precargado desde conteo.alcance
+  // cuando ya trae ubicación o familia).
+  const [asignando, setAsignando] = useState(false);
+  const [nuevoAsignado, setNuevoAsignado] = useState('');
+  const [nuevaUbicacion, setNuevaUbicacion] = useState('');
+  const [nuevaFamilia, setNuevaFamilia] = useState('');
 
   const puedeVerTeorico = useMemo(
     () => conteo.estado !== 'en_captura' || conteo.vista_ciega === false || ['super_admin', 'direccion'].includes(role ?? ''),
     [conteo, role]
   );
+  const puedeAplicar = ['super_admin', 'direccion'].includes(role ?? '');
+
+  const cargarCongelamientos = async () => {
+    const res = await fetch(`/api/inventario/conteos/${conteo.id}/congelamientos`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) setCongelamientos(data.data ?? []);
+  };
 
   useEffect(() => {
     void (async () => {
@@ -56,12 +111,25 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
       const { data: u } = await supabase.rpc('usuarios_directorio');
       setUsuarios((u ?? []).map((p: any) => ({ id: p.id, full_name: p.full_name })));
 
-      const [conc, ex] = await Promise.all([
+      const [conc, ex, ubi, fam] = await Promise.all([
         fetch(`/api/inventario/conteos/${conteo.id}/conciliacion`).then((r) => r.json()),
         fetch(`/api/inventario/conteos/${conteo.id}/exactitud`).then((r) => r.json()),
+        fetch('/api/ubicaciones').then((r) => r.json()),
+        fetch('/api/catalogos/familias').then((r) => r.json()),
       ]);
       setConciliacion(conc.data ?? []);
       setExactitud(ex.data ?? []);
+      setUbicaciones((ubi.data ?? []).map((x: any) => ({ id: x.id, label: `${x.codigo} — ${x.nombre}` })));
+      setFamilias((fam.data ?? []).map((x: any) => ({ id: x.id, label: `${x.clave} — ${x.nombre}` })));
+
+      // Precarga el alcance de la asignación con el alcance del propio
+      // conteo cuando ya está acotado a una ubicación/familia — el caso
+      // más común es que el capturista cubra exactamente ese alcance.
+      const alcance = conteo.alcance as { ubicacion_id?: string; familia_id?: string };
+      if (alcance?.ubicacion_id) setNuevaUbicacion(alcance.ubicacion_id);
+      if (alcance?.familia_id) setNuevaFamilia(alcance.familia_id);
+
+      void cargarCongelamientos();
     })();
   }, [conteo.id]);
 
@@ -83,26 +151,60 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
     return true;
   };
 
-  const congelar = () => void accion(`/api/inventario/conteos/${conteo.id}/congelar`);
+  const congelar = () => void accion(`/api/inventario/conteos/${conteo.id}/congelar`).then(() => cargarCongelamientos());
   const transicionar = (estado: string) => void accion(`/api/inventario/conteos/${conteo.id}/estado`, { estado });
-  const cancelar = () => {
-    const motivo = window.prompt('Motivo de cancelación:');
-    if (motivo) void accion(`/api/inventario/conteos/${conteo.id}/estado`, { estado: 'cancelado', motivo_cancelacion: motivo });
+  // 'aplicado'/'cancelado' liberan solos el congelamiento
+  // (after_update_conteos_liberar, 016) — refrescar la lista para que se
+  // vea de inmediato, no sólo tras el próximo mount.
+  const aplicar = () => void accion(`/api/inventario/conteos/${conteo.id}/aplicar`).then(() => cargarCongelamientos());
+  const cancelar = (motivo: string) =>
+    accion(`/api/inventario/conteos/${conteo.id}/estado`, { estado: 'cancelado', motivo_cancelacion: motivo }).then((ok) => {
+      void cargarCongelamientos();
+      return ok;
+    });
+
+  const liberar = async (congelamientoId: string, motivo: string) => {
+    const res = await fetch(`/api/inventario/conteos/${conteo.id}/congelamientos/${congelamientoId}/liberar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo_liberacion: motivo }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      void cargarCongelamientos();
+      return true;
+    }
+    setError(data?.error ?? 'No se pudo liberar el congelamiento.');
+    return false;
   };
 
   const asignar = async () => {
-    const asignado_a = window.prompt(
-      `Asigna a (pega el id de usuario):\n${usuarios.map((u) => `${u.full_name}: ${u.id}`).join('\n')}`
-    );
-    if (!asignado_a) return;
+    if (!nuevoAsignado) {
+      setError('Elige a quién asignar.');
+      return;
+    }
+    if (!nuevaUbicacion && !nuevaFamilia) {
+      setError('Indica una ubicación o una familia para la asignación.');
+      return;
+    }
+    setError(null);
     const res = await fetch(`/api/inventario/conteos/${conteo.id}/asignaciones`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ asignado_a, familia_id: null, ubicacion_id: null }),
+      body: JSON.stringify({
+        asignado_a: nuevoAsignado,
+        ubicacion_id: nuevaUbicacion || null,
+        familia_id: nuevaUbicacion ? null : nuevaFamilia || null,
+      }),
     });
-    const data = await res.json();
-    if (res.ok) setAsignaciones((a) => [...a, data.data]);
-    else setError(data?.error ?? 'Error al asignar');
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setAsignaciones((a) => [...a, data.data]);
+      setAsignando(false);
+      setNuevoAsignado('');
+    } else {
+      setError(data?.error ?? 'Error al asignar');
+    }
   };
 
   const firmar = async (rol_firma: FirmaRol) => {
@@ -116,7 +218,16 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
     else setError(data?.error ?? 'Error al firmar');
   };
 
-  const siguientes = CONTEO_TRANSICIONES[conteo.estado] ?? [];
+  // 'congelado' y 'aplicado' tienen botón dedicado (Congelar / Aplicar al
+  // inventario), cada uno con su propia ruta que hace más que un UPDATE
+  // genérico — ofrecerlos también aquí (M-06, E-03/E-04,
+  // contexto/AUDITORIA_QA_ROLES_2026-08-06.md) daba dos caminos para lo
+  // mismo, y el de /estado nunca aplicó nada al inventario (además de
+  // dejar que almacen lo activara, ya que /estado no distinguía roles por
+  // estado destino).
+  const transicionesDisponibles = CONTEO_TRANSICIONES[conteo.estado] ?? [];
+  const siguientes = transicionesDisponibles.filter((s) => s !== 'cancelado' && s !== 'congelado' && s !== 'aplicado');
+  const puedeCancelar = transicionesDisponibles.includes('cancelado');
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -145,22 +256,36 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
               <Snowflake className="w-4 h-4 mr-2" /> Congelar
             </Button>
           )}
-          {siguientes
-            .filter((s) => s !== 'cancelado')
-            .map((s) => (
-              <Button key={s} onClick={() => transicionar(s)} disabled={loading} variant="outline">
-                Pasar a {s}
-              </Button>
-            ))}
+          {siguientes.map((s) => (
+            <Button key={s} onClick={() => transicionar(s)} disabled={loading} variant="outline">
+              Pasar a {CONTEO_ESTADO_LABELS[s]}
+            </Button>
+          ))}
           {conteo.estado === 'en_captura' && (
             <Button asChild className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
               <Link href={`/dashboard/inventario/conteos/${conteo.id}/captura`}>Ir a captura</Link>
             </Button>
           )}
-          {siguientes.includes('cancelado') && (
-            <Button onClick={cancelar} disabled={loading} variant="outline" className="text-destructive">
-              Cancelar
+          {conteo.estado === 'cerrado' && puedeAplicar && (
+            <Button onClick={aplicar} disabled={loading} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+              <CheckCircle2 className="w-4 h-4 mr-2" /> Aplicar al inventario
             </Button>
+          )}
+          {puedeCancelar && (
+            <MotivoDialog
+              trigger={
+                <Button disabled={loading} variant="outline" className="text-destructive">
+                  Cancelar
+                </Button>
+              }
+              titulo="Cancelar conteo"
+              descripcion="Explica por qué se cancela este conteo — queda en el acta."
+              placeholder="Motivo de cancelación…"
+              minLength={5}
+              confirmLabel="Cancelar conteo"
+              destructivo
+              onConfirm={cancelar}
+            />
           )}
         </div>
       </div>
@@ -268,10 +393,63 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
               ))}
               {asignaciones.length === 0 && <li className="text-xs text-muted-foreground">Sin asignaciones.</li>}
             </ul>
-            {(conteo.estado === 'congelado' || conteo.estado === 'en_captura') && (
-              <Button variant="outline" size="sm" className="w-full" onClick={asignar}>
+            {(conteo.estado === 'congelado' || conteo.estado === 'en_captura') && !asignando && (
+              <Button variant="outline" size="sm" className="w-full" onClick={() => setAsignando(true)}>
                 Asignar capturista
               </Button>
+            )}
+            {asignando && (
+              <div className="p-2 bg-rtb-surface/60 rounded-lg space-y-2">
+                <select
+                  value={nuevoAsignado}
+                  onChange={(e) => setNuevoAsignado(e.target.value)}
+                  className="w-full text-xs border border-border rounded-lg px-2 py-1.5"
+                >
+                  <option value="">Selecciona un usuario…</option>
+                  {usuarios.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={nuevaUbicacion}
+                  onChange={(e) => {
+                    setNuevaUbicacion(e.target.value);
+                    if (e.target.value) setNuevaFamilia('');
+                  }}
+                  className="w-full text-xs border border-border rounded-lg px-2 py-1.5"
+                >
+                  <option value="">Sin ubicación específica</option>
+                  {ubicaciones.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.label}
+                    </option>
+                  ))}
+                </select>
+                {!nuevaUbicacion && (
+                  <select
+                    value={nuevaFamilia}
+                    onChange={(e) => setNuevaFamilia(e.target.value)}
+                    className="w-full text-xs border border-border rounded-lg px-2 py-1.5"
+                  >
+                    <option value="">Sin familia específica</option>
+                    {familias.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setAsignando(false)}>
+                    Cancelar
+                  </Button>
+                  <Button size="sm" onClick={asignar} disabled={!nuevoAsignado}>
+                    Asignar
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
 
@@ -306,6 +484,38 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
               </div>
             )}
           </div>
+
+          {congelamientos.length > 0 && (
+            <div className="bg-white rounded-xl p-5 space-y-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
+              <h3 className="text-sm font-display font-semibold text-rtb-navy flex items-center gap-1.5">
+                <Snowflake className="w-4 h-4 text-rtb-teal" /> Congelamiento
+              </h3>
+              <ul className="space-y-2 text-xs">
+                {congelamientos.map((c) => (
+                  <li key={c.id} className="flex items-center justify-between gap-2 border-b border-border/50 pb-2">
+                    <span>
+                      {c.productos ? `${c.productos.codigo_interno} — ${c.productos.nombre}` : c.ubicaciones_internas ? `${c.ubicaciones_internas.codigo} — ${c.ubicaciones_internas.nombre}` : 'Alcance general'}
+                      {c.liberado_at && <span className="block text-muted-foreground">Liberado: {c.motivo_liberacion}</span>}
+                    </span>
+                    {!c.liberado_at && (
+                      <MotivoDialog
+                        trigger={
+                          <Button size="sm" variant="outline" className="shrink-0">
+                            <Unlock className="w-3.5 h-3.5 mr-1" /> Liberar
+                          </Button>
+                        }
+                        titulo="Liberar congelamiento"
+                        descripcion="El producto/ubicación vuelve a poder moverse en el kardex. Explica por qué se libera antes de que el conteo termine."
+                        placeholder="Motivo de liberación…"
+                        confirmLabel="Liberar"
+                        onConfirm={(motivo) => liberar(c.id, motivo)}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </aside>
       </div>
     </div>

@@ -23,6 +23,16 @@ export const rfcSchema = z
   .toUpperCase()
   .refine(rfcValido, 'RFC inválido');
 
+// Espejo del CHECK entidades_siglas_chk (020_entidades_siglas.sql). Sin
+// espacio interno: unas siglas con espacio no sirven como identificador
+// corto; & . - se permiten porque las razones sociales mexicanas los usan
+// (AT&T, S.A. DE C.V.).
+export const siglasSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(/^[A-Z0-9&.-]{2,12}$/, 'De 2 a 12 caracteres, sin espacios');
+
 export const correoSchema = z.string().trim().toLowerCase().email('Correo electrónico inválido');
 const codigoPostalSchema = z.string().trim().refine(cpValido, 'Código postal inválido (5 dígitos)');
 
@@ -40,11 +50,13 @@ export const entidadDatosSchema = z.object({
   telefono_principal: z.string().trim().max(30).optional().nullable(),
   sitio_web: z.string().trim().max(200).optional().nullable(),
   observaciones: z.string().trim().max(4000).optional().nullable(),
+  siglas: siglasSchema.optional().nullable(),
 });
 
 /** Campos de entidades que se pueden editar sin pasar por
  *  solicitudes_cambio (P05: "modificación libre") — espejo del GRANT
- *  UPDATE por columna de 002_entidades_core.sql. nombre_legal y rfc NO
+ *  UPDATE por columna de 020_entidades_siglas.sql (que reafirma la lista
+ *  completa de 002_entidades_core.sql + siglas). nombre_legal y rfc NO
  *  están aquí: son "modificación controlada". */
 export const entidadUpdateLibreSchema = z.object({
   nombre_comercial: z.string().trim().max(200).optional().nullable(),
@@ -52,6 +64,7 @@ export const entidadUpdateLibreSchema = z.object({
   telefono_principal: z.string().trim().max(30).optional().nullable(),
   sitio_web: z.string().trim().max(200).optional().nullable(),
   observaciones: z.string().trim().max(4000).optional().nullable(),
+  siglas: siglasSchema.optional().nullable(),
 });
 
 export const clienteDatosSchema = z.object({

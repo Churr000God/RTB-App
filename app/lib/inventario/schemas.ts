@@ -13,6 +13,7 @@ import {
   UNIDAD_TIPOS,
 } from '@/types/inventario';
 import { cantidadRespetaDecimales, discrepanciaRequiereCausa } from './validaciones';
+import { IMAGEN_BYTES_MAX, IMAGEN_MIMES } from './config';
 
 // Esquemas zod compartidos por las rutas de app/app/api/{productos,catalogos,
 // proveedor-productos,inventario/*}. Mismo patrón que lib/entidades/schemas.ts:
@@ -165,6 +166,28 @@ export const productoFusionarSchema = z.object({
   producto_canonico_id: z.string().uuid('Selecciona el producto canónico'),
   motivo: motivoSchema,
 });
+
+// ---------- Imágenes de producto (021_producto_imagenes.sql) ----------
+
+/** Metadatos del archivo real, derivados en el servidor a partir del
+ *  FormData recibido — nunca de lo que el cliente declare sobre sí mismo. */
+export const productoImagenMetaSchema = z.object({
+  descripcion: z.string().trim().max(300).optional().nullable(),
+  mime: z.enum(IMAGEN_MIMES),
+  bytes: z.number().int().positive().max(IMAGEN_BYTES_MAX),
+  ancho: z.number().int().positive().optional().nullable(),
+  alto: z.number().int().positive().optional().nullable(),
+});
+
+/** Espejo EXACTO del GRANT UPDATE por columna de producto_imagenes (021):
+ *  es_principal/activo quedan fuera — se cambian por rutas dedicadas con
+ *  el cliente admin, nunca por este PATCH genérico. */
+export const productoImagenUpdateSchema = z
+  .object({
+    descripcion: z.string().trim().max(300).optional().nullable(),
+    orden: z.coerce.number().int().min(0).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada que actualizar' });
 
 // ---------- Redefinición de unidad de medida (causa #1 de pérdida medida) ----------
 

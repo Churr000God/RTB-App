@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils';
-import type { AjusteEstado, ConteoEstado, DiscrepanciaEstado, ProductoEstado } from '@/types/inventario';
+import type { AjusteEstado, ConteoEstado, DiscrepanciaEstado, HallazgoEstado, ProductoEstado } from '@/types/inventario';
 import {
   AJUSTE_ESTADO_LABELS,
   AJUSTE_ESTADO_TONO,
@@ -7,6 +7,8 @@ import {
   CONTEO_ESTADO_TONO,
   DISCREPANCIA_ESTADO_LABELS,
   DISCREPANCIA_ESTADO_TONO,
+  HALLAZGO_ESTADO_LABELS,
+  HALLAZGO_ESTADO_TONO,
   PRODUCTO_ESTADO_LABELS,
   PRODUCTO_ESTADO_TONO,
 } from '@/lib/inventario/config';
@@ -50,6 +52,10 @@ export function AjusteEstadoBadge({ estado, className }: { estado: AjusteEstado;
 
 export function DiscrepanciaEstadoBadge({ estado, className }: { estado: DiscrepanciaEstado; className?: string }) {
   return <Badge tono={DISCREPANCIA_ESTADO_TONO[estado]} label={DISCREPANCIA_ESTADO_LABELS[estado]} className={className} />;
+}
+
+export function HallazgoEstadoBadge({ estado, className }: { estado: HallazgoEstado; className?: string }) {
+  return <Badge tono={HALLAZGO_ESTADO_TONO[estado]} label={HALLAZGO_ESTADO_LABELS[estado]} className={className} />;
 }
 
 /** Alerta de stock (⚪/🔴/🟢, RTB-PRO-COM-01 §III) — su propio esquema de

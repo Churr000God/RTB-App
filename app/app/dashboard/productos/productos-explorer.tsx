@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/rbac/hooks';
@@ -8,10 +8,11 @@ import { puede } from '@/lib/inventario/permisos';
 import { ProductoEstadoBadge } from '@/components/inventario/estado-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { ProductoConMarca, ProductoEstado } from '@/types/inventario';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import type { ProductoConImagen, ProductoEstado } from '@/types/inventario';
 import { PRODUCTO_ESTADOS } from '@/types/inventario';
 import { PRODUCTO_ESTADO_LABELS } from '@/lib/inventario/config';
-import { AlertTriangle, Loader2, MapPinOff, Package, Plus, Search } from 'lucide-react';
+import { AlertTriangle, LayoutGrid, List, Loader2, MapPinOff, Package, Plus, Search } from 'lucide-react';
 
 interface Kpis {
   total: number;
@@ -22,11 +23,14 @@ interface Kpis {
 }
 
 interface Props {
-  initialData: ProductoConMarca[];
+  initialData: ProductoConImagen[];
   initialCount: number;
   pageSize: number;
   kpis: Kpis;
 }
+
+type Vista = 'tabla' | 'galeria';
+const VISTA_STORAGE_KEY = 'rtb.productos.vista';
 
 export function ProductosExplorer({ initialData, initialCount, pageSize, kpis }: Props) {
   const { role } = useAuth();
@@ -38,6 +42,20 @@ export function ProductosExplorer({ initialData, initialCount, pageSize, kpis }:
   const [data, setData] = useState(initialData);
   const [count, setCount] = useState(initialCount);
   const [loading, setLoading] = useState(false);
+
+  // 'tabla' fijo en el render inicial (servidor y cliente coinciden) — leer
+  // localStorage en un useEffect, nunca en el inicializador de useState:
+  // hacerlo ahí produciría un mismatch de hidratación (el HTML del
+  // servidor no conoce el localStorage del navegador).
+  const [vista, setVista] = useState<Vista>('tabla');
+  useEffect(() => {
+    const guardada = window.localStorage.getItem(VISTA_STORAGE_KEY);
+    if (guardada === 'tabla' || guardada === 'galeria') setVista(guardada);
+  }, []);
+  const cambiarVista = (v: Vista) => {
+    setVista(v);
+    window.localStorage.setItem(VISTA_STORAGE_KEY, v);
+  };
 
   const totalPages = Math.max(1, Math.ceil(count / pageSize));
 
@@ -146,59 +164,29 @@ export function ProductosExplorer({ initialData, initialCount, pageSize, kpis }:
           <Button variant="outline" onClick={() => aplicarFiltro({ q })}>
             <Search className="w-4 h-4 mr-2" /> Buscar
           </Button>
+          <ToggleGroup
+            type="single"
+            value={vista}
+            onValueChange={(v) => v && cambiarVista(v as Vista)}
+            className="ml-auto border border-border rounded-lg p-0.5"
+          >
+            <ToggleGroupItem value="tabla" aria-label="Vista de tabla" size="sm">
+              <List className="w-4 h-4" />
+            </ToggleGroupItem>
+            <ToggleGroupItem value="galeria" aria-label="Vista de galería" size="sm">
+              <LayoutGrid className="w-4 h-4" />
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
 
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="w-6 h-6 text-rtb-teal animate-spin" />
           </div>
+        ) : vista === 'tabla' ? (
+          <TablaProductos data={data} onFila={(id) => router.push(`/dashboard/productos/${id}`)} />
         ) : (
-          <table className="w-full">
-            <thead>
-              <tr className="bg-rtb-navy text-white">
-                <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Código interno</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Producto</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">SKU</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Marca</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Estado</th>
-                <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Alta</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((p, i) => (
-                <tr
-                  key={p.id}
-                  onClick={() => router.push(`/dashboard/productos/${p.id}`)}
-                  className={`border-b border-border/50 cursor-pointer hover:bg-muted/30 transition-colors ${i % 2 === 1 ? 'bg-rtb-surface/40' : ''}`}
-                >
-                  <td className="py-3 px-4 text-xs tabular-nums text-muted-foreground">{p.codigo_interno}</td>
-                  <td className="py-3 px-4">
-                    <p className="text-sm font-display font-medium text-rtb-navy flex items-center gap-1.5">
-                      {p.nombre}
-                      {p.requiere_ubicacion === false && <MapPinOff className="w-3.5 h-3.5 text-muted-foreground" />}
-                    </p>
-                    {p.descripcion && <p className="text-xs text-muted-foreground truncate max-w-md">{p.descripcion}</p>}
-                  </td>
-                  <td className="py-3 px-4 text-xs tabular-nums">{p.sku ?? '—'}</td>
-                  <td className="py-3 px-4 text-xs">{p.producto_marcas?.nombre ?? '—'}</td>
-                  <td className="py-3 px-4">
-                    <ProductoEstadoBadge estado={p.estado} />
-                  </td>
-                  <td className="py-3 px-4 text-xs text-muted-foreground tabular-nums">
-                    {new Date(p.created_at).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
-                  </td>
-                </tr>
-              ))}
-              {data.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="py-10 text-center text-muted-foreground text-sm">
-                    <AlertTriangle className="w-6 h-6 mx-auto mb-2 opacity-40" />
-                    No se encontraron productos
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <GaleriaProductos data={data} onTarjeta={(id) => router.push(`/dashboard/productos/${id}`)} />
         )}
 
         <div className="flex items-center justify-between px-4 py-3 border-t border-border text-sm text-muted-foreground">
@@ -215,6 +203,106 @@ export function ProductosExplorer({ initialData, initialCount, pageSize, kpis }:
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function TablaProductos({ data, onFila }: { data: ProductoConImagen[]; onFila: (id: string) => void }) {
+  return (
+    <table className="w-full">
+      <thead>
+        <tr className="bg-rtb-navy text-white">
+          <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Código interno</th>
+          <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Producto</th>
+          <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">SKU</th>
+          <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Marca</th>
+          <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Estado</th>
+          <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wider">Alta</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((p, i) => (
+          <tr
+            key={p.id}
+            onClick={() => onFila(p.id)}
+            className={`border-b border-border/50 cursor-pointer hover:bg-muted/30 transition-colors ${i % 2 === 1 ? 'bg-rtb-surface/40' : ''}`}
+          >
+            <td className="py-3 px-4 text-xs tabular-nums text-muted-foreground">{p.codigo_interno}</td>
+            <td className="py-3 px-4">
+              <p className="text-sm font-display font-medium text-rtb-navy flex items-center gap-1.5">
+                {p.nombre}
+                {p.requiere_ubicacion === false && <MapPinOff className="w-3.5 h-3.5 text-muted-foreground" />}
+              </p>
+              {p.descripcion && <p className="text-xs text-muted-foreground truncate max-w-md">{p.descripcion}</p>}
+            </td>
+            <td className="py-3 px-4 text-xs tabular-nums">{p.sku ?? '—'}</td>
+            <td className="py-3 px-4 text-xs">{p.producto_marcas?.nombre ?? '—'}</td>
+            <td className="py-3 px-4">
+              <ProductoEstadoBadge estado={p.estado} />
+            </td>
+            <td className="py-3 px-4 text-xs text-muted-foreground tabular-nums">
+              {new Date(p.created_at).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+            </td>
+          </tr>
+        ))}
+        {data.length === 0 && (
+          <tr>
+            <td colSpan={6} className="py-10 text-center text-muted-foreground text-sm">
+              <AlertTriangle className="w-6 h-6 mx-auto mb-2 opacity-40" />
+              No se encontraron productos
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+// Nota: <img>, no next/image — next.config.js tiene images.unoptimized=true
+// (sin transformación real), así que next/image no aporta nada aquí y sólo
+// añade superficie de fallo. Si algún día se quita unoptimized, hay que
+// añadir remotePatterns con el host de Supabase Storage del proyecto.
+function GaleriaProductos({ data, onTarjeta }: { data: ProductoConImagen[]; onTarjeta: (id: string) => void }) {
+  if (data.length === 0) {
+    return (
+      <div className="py-10 text-center text-muted-foreground text-sm">
+        <AlertTriangle className="w-6 h-6 mx-auto mb-2 opacity-40" />
+        No se encontraron productos
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
+      {data.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          onClick={() => onTarjeta(p.id)}
+          className="text-left bg-rtb-surface/40 rounded-xl overflow-hidden hover:shadow-md transition-shadow"
+        >
+          <div className="aspect-square bg-rtb-surface flex items-center justify-center overflow-hidden">
+            {p.imagen_principal ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.imagen_principal.url_miniatura ?? p.imagen_principal.url}
+                alt={p.imagen_principal.descripcion ?? p.nombre}
+                loading="lazy"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <Package className="w-8 h-8 text-muted-foreground opacity-30" />
+            )}
+          </div>
+          <div className="p-3">
+            <p className="text-sm font-display font-medium text-rtb-navy truncate">{p.nombre}</p>
+            <p className="text-xs text-muted-foreground tabular-nums truncate">{p.codigo_interno}</p>
+            <div className="flex items-center justify-between mt-1.5">
+              <span className="text-xs text-muted-foreground truncate">{p.producto_marcas?.nombre ?? '—'}</span>
+              <ProductoEstadoBadge estado={p.estado} />
+            </div>
+          </div>
+        </button>
+      ))}
     </div>
   );
 }

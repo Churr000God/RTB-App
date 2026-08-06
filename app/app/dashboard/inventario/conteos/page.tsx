@@ -6,10 +6,14 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { Button } from '@/components/ui/button';
 import { ConteoEstadoBadge } from '@/components/inventario/estado-badge';
 import { CONTEO_TIPO_LABELS } from '@/lib/inventario/config';
+import { puede } from '@/lib/inventario/permisos';
 import { ClipboardCheck, Plus } from 'lucide-react';
 
 export default async function ConteosPage() {
-  await requireActiveUser();
+  const auth = await requireActiveUser();
+  // E-08 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md) — mismo hallazgo que
+  // en /ajustes: "Nuevo Conteo" se mostraba sin condición a cualquier rol.
+  const puedeCrear = puede(auth.profile.role, 'conteos', 'insert');
 
   const supabase = createSupabaseServerClient();
   const { data: conteos } = await supabase
@@ -27,11 +31,13 @@ export default async function ConteosPage() {
           </h1>
           <p className="text-muted-foreground mt-1">RTB-CIE-01 · vista ciega, congelamiento, firmas y acta versionada</p>
         </div>
-        <Button asChild className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-          <Link href="/dashboard/inventario/conteos/nuevo">
-            <Plus className="w-4 h-4 mr-2" /> Nuevo Conteo
-          </Link>
-        </Button>
+        {puedeCrear && (
+          <Button asChild className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            <Link href="/dashboard/inventario/conteos/nuevo">
+              <Plus className="w-4 h-4 mr-2" /> Nuevo Conteo
+            </Link>
+          </Button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl overflow-hidden" style={{ boxShadow: 'var(--shadow-sm)' }}>

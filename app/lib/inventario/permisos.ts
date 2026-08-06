@@ -6,6 +6,7 @@ export type RecursoInventario =
   | 'catalogo_categorias'
   | 'catalogo_marcas'
   | 'productos'
+  | 'producto_imagenes'
   | 'proveedor_productos'
   | 'producto_costos'
   | 'precios_referencia'
@@ -65,6 +66,14 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
     update: ['super_admin', 'direccion', 'compras', 'almacen'],
   },
   productos: {
+    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    insert: ['super_admin', 'direccion', 'compras', 'almacen'],
+    update: ['super_admin', 'direccion', 'compras', 'almacen'],
+  },
+  // Espejo de 021_producto_imagenes.sql — mismos 4 roles de productos.
+  // es_principal/activo no son "update" de esta matriz: se cambian por
+  // rutas dedicadas con el cliente admin, fuera del GRANT UPDATE de columna.
+  producto_imagenes: {
     select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     update: ['super_admin', 'direccion', 'compras', 'almacen'],

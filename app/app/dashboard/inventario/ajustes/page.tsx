@@ -6,13 +6,21 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { Button } from '@/components/ui/button';
 import { AjusteEstadoBadge } from '@/components/inventario/estado-badge';
 import { AJUSTE_TIPO_LABELS } from '@/lib/inventario/config';
+import { puede } from '@/lib/inventario/permisos';
 import { FileEdit, Plus } from 'lucide-react';
 
 // Bandeja de ajustes (CIE-AJU-01). "Ajustes aplicados sin autorización
 // registrada: 34 de 34" es el hallazgo real que este flujo cierra —
 // autorizar/rechazar/aplicar viven en el detalle, nunca aquí.
 export default async function AjustesPage() {
-  await requireActiveUser();
+  const auth = await requireActiveUser();
+  // E-08 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): "Nuevo Ajuste" se
+  // mostraba a cualquier rol autenticado sin mirar puede() — a diferencia
+  // de Catálogos/Ubicaciones/Productos/Entidades, que sí lo hacen. Un rol
+  // sin permiso llenaba el formulario entero y sólo fallaba al final con
+  // 403. Server Component: el rol ya viene resuelto por requireActiveUser(),
+  // no hace falta useAuth() en cliente para esto.
+  const puedeCrear = puede(auth.profile.role, 'ajustes', 'insert');
 
   const supabase = createSupabaseServerClient();
   const [{ data: ajustes }, pendientes] = await Promise.all([
@@ -29,11 +37,13 @@ export default async function AjustesPage() {
           </h1>
           <p className="text-muted-foreground mt-1">CIE-AJU-01 · ningún ajuste mueve inventario sin autorización de un tercero</p>
         </div>
-        <Button asChild className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-          <Link href="/dashboard/inventario/ajustes/nuevo">
-            <Plus className="w-4 h-4 mr-2" /> Nuevo Ajuste
-          </Link>
-        </Button>
+        {puedeCrear && (
+          <Button asChild className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            <Link href="/dashboard/inventario/ajustes/nuevo">
+              <Plus className="w-4 h-4 mr-2" /> Nuevo Ajuste
+            </Link>
+          </Button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl p-4 border-l-4 border-l-rtb-gold w-fit" style={{ boxShadow: 'var(--shadow-sm)' }}>
