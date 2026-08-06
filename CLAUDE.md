@@ -35,10 +35,13 @@ Variables de entorno: `app/.env` (nunca versionado — ver `.gitignore`). Planti
 app/
 ├── app/                  # rutas (App Router): /login, /dashboard, /api/admin,
 │   │                     # /api/entidades, /api/proveedores, /api/ubicaciones,
-│   │                     # /api/solicitudes-cambio, /logout
+│   │                     # /api/solicitudes-cambio, /api/productos, /api/catalogos,
+│   │                     # /api/proveedor-productos, /api/precios-referencia,
+│   │                     # /api/redefiniciones-unidad, /api/inventario/*, /logout
 ├── components/
 │   ├── auth/             # LoginForm
 │   ├── entidades/        # EstadoBadge (RTB-ENT-01)
+│   ├── inventario/       # EstadoBadge de producto/conteo/ajuste/discrepancia (RTB-INV-01)
 │   ├── layout/           # Sidebar, Header, DashboardShell, AuthProvider
 │   └── ui/                # shadcn/Radix
 ├── lib/
@@ -46,9 +49,12 @@ app/
 │   │                     # sin DB), admin.ts (service_role, server-only),
 │   │                     # guards.ts (requireActiveUser/requireRole/requireApiRole)
 │   ├── rbac/             # configuración de roles, permisos y hooks
-│   └── entidades/        # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts,
-│                         # http.ts — capa compartida de RTB-ENT-01
-├── types/                # tipos TypeScript del sistema (database.ts, entidades.ts)
+│   ├── entidades/        # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts,
+│   │                     # http.ts — capa compartida de RTB-ENT-01
+│   └── inventario/       # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts
+│                         # — capa compartida de RTB-INV-01 (reutiliza entidades/http.ts)
+├── types/                # tipos TypeScript del sistema (database.ts, entidades.ts,
+│                         # inventario.ts)
 └── middleware.ts         # protección de rutas con Supabase SSR
 db/migrations/            # SQL versionado, aplicado vía MCP apply_migration
 contexto/                 # documentos de negocio, marca y specs de cada módulo
@@ -63,17 +69,20 @@ contexto/                 # documentos de negocio, marca y specs de cada módulo
 |---|---|---|
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
 | 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
-| 3 | Ventas | 🔜 Planificado |
-| 4 | Compras | 🔜 Planificado |
-| 5 | Almacén | 🔜 Planificado |
-| 6 | Rutas | 🔜 Planificado |
-| 7 | Facturación | 🔜 Planificado (timbrado SAT vía n8n) |
-| 8 | Finanzas | 🔜 Planificado |
+| 3 | RTB-INV-01 Productos, Costos e Inventario (catálogo, kardex, conteos, discrepancias, ajustes) | ✅ Base funcional (auditado 2026-08-05) |
+| 4 | Ventas | 🔜 Planificado |
+| 5 | Compras | 🔜 Planificado |
+| 6 | Almacén | 🔜 Planificado |
+| 7 | Rutas | 🔜 Planificado |
+| 8 | Facturación | 🔜 Planificado (timbrado SAT vía n8n) |
+| 9 | Finanzas | 🔜 Planificado |
 
-Especificación de cada módulo en `contexto/RTB-PRO-*.md`. RTB-ENT-01 tiene su
-propio par: `contexto/RTB-ENT-01_Modulo_Entidades.md` (spec corregida, la que
-manda) y `contexto/AUDITORIA_RTB-ENT-01.md` (qué traía el paquete original de
-AbacusAI y qué se corrigió).
+Especificación de cada módulo en `contexto/RTB-PRO-*.md`. RTB-ENT-01 y
+RTB-INV-01 tienen su propio par: `contexto/RTB-ENT-01_Modulo_Entidades.md` /
+`contexto/RTB-INV-01_Modulo_Productos_Inventario.md` (spec corregida, la que
+manda) y `contexto/AUDITORIA_RTB-ENT-01.md` /
+`contexto/AUDITORIA_RTB-INV-01.md` (qué traía cada paquete original y qué se
+corrigió).
 
 ## Identidad visual
 
@@ -181,6 +190,45 @@ AbacusAI y qué se corrigió).
   verificar `GRANT` de tabla y política RLS por separado, y probar tanto por
   SQL simulando el rol (`set local role authenticated` +
   `set_config('request.jwt.claim.sub', ...)`) como por la UI real.
+- **`language sql` valida objetos referenciados en `CREATE`, `plpgsql` no.**
+  Al escribir `009_inventario_catalogo.sql`…`014_inventario_kpis.sql`, una
+  función `language sql` que referencia una tabla creada más abajo en el
+  mismo archivo falla al aplicar la migración (`relation ... does not
+  exist`) aunque la tabla exista para cuando la función se **llame** —
+  Postgres analiza el cuerpo SQL en el `CREATE FUNCTION`. Pasó con
+  `inventario_congelamiento_activo()`: tuvo que moverse después de
+  `CREATE TABLE inventario_congelamientos`. Una función `plpgsql` no tiene
+  este problema (su cuerpo es una cadena opaca hasta la ejecución) —
+  por eso el trigger grande del kardex (`inventario_movimientos_before_insert()`,
+  `plpgsql`) sí pudo referenciar por nombre funciones que ese mismo archivo
+  reemplaza más abajo con `CREATE OR REPLACE`, sin importar el orden.
+- **`GRANT INSERT` sin restricción de columna + una máquina de estados que
+  sólo valida en `UPDATE` = forjar el estado inicial.** Si una tabla tiene
+  un `CHECK`/trigger que exige requisitos para cierto `estado` (p.ej. "no
+  hay `cerrado` sin firmas"), pero ese trigger sólo corre en `BEFORE
+  UPDATE`, un `INSERT` directo con ese `estado` ya puesto se lo salta
+  entero — el problema no es el `CHECK` (se evalúa igual), es que los
+  campos que lo acompañan (`cerrado_at`, `cerrado_por`) también llegan ya
+  puestos en el mismo `INSERT`, sin que ningún trigger los objete. Pasó
+  diseñando `inventario_conteos` (RTB-INV-01): se corrigió restringiendo el
+  `GRANT INSERT` a las columnas de creación, dejando fuera `estado` y todo
+  el resto del ciclo de vida — toda fila nueva nace en su estado inicial
+  por el `DEFAULT`, nunca por elección del cliente. Regla general: cualquier
+  tabla cuyo ciclo de vida dependa de una validación que sólo corre en
+  `UPDATE` necesita `GRANT INSERT` restringido por columna, no sólo
+  `GRANT UPDATE`.
+- **Extender un `CHECK` existente puede reabrir un hueco de autorización ya
+  cerrado.** El kardex de RTB-INV-01 (`011_inventario_kardex.sql`) definió
+  4 tipos de movimiento de "corrección" pero `mov_ajuste_chk` sólo exigía
+  autorización (`ajuste_id` + `ajuste_autorizado()`) para 2 de ellos
+  (`entrada_ajuste`/`salida_ajuste`); los otros 2
+  (`entrada_conteo`/`salida_conteo`) sólo exigían `conteo_id`, sin pasar
+  por el mismo control. Se detectó al diseñar la migración siguiente
+  (`012_inventario_conteos.sql`), antes de que hubiera datos reales en
+  riesgo, y se corrigió con un `ALTER TABLE ... DROP/ADD CONSTRAINT` al
+  inicio de ese archivo. Al añadir un tipo/variante nuevo a una columna
+  cerrada por `CHECK`, repasar **todas** las reglas de autorización que
+  dependen de esa columna, no sólo las que el nuevo tipo obviamente toca.
 
 ## Historial de decisiones
 
@@ -225,8 +273,56 @@ AbacusAI y qué se corrigió).
   — la pestaña de Auditoría fallaba en silencio, no de forma visible) y
   `audit_log.usuario_id` sin `ON DELETE SET NULL`
   (`007_audit_log_on_delete_set_null.sql`). Corregidos y reverificados.
+- **2026-08-05** — Submódulo RTB-INV-01 (Productos, Costos e Inventario:
+  catálogo, kardex, conteos físicos, discrepancias, ajustes autorizados).
+  Paquete de origen mucho más delgado que el de RTB-ENT-01
+  (`RTB_Modulo_Productos_Costos.zip`, ~100 líneas: análisis funcional +
+  DDL de 6 tablas sin RLS/GRANT/auditoría + una nota de flujo de conteos),
+  contrastado además contra documentación operativa **real** de RTB fuera
+  del repositorio (reporte de existencias, Acta de Conteo Físico
+  CIE-CON-01, Registro de Discrepancias CIE-DIS-01), que mide fallas
+  concretas del proceso actual: −$37,919.77 por unidad de medida mal
+  definida, 34 de 34 ajustes históricos sin autorización registrada, 73.9%
+  del catálogo sin ubicación. El paquete tenía el vocabulario real/teórico
+  invertido, un ajuste automático de inventario sin autorización de
+  tercero, y una unidad de medida "inmutable" como `CHECK` de 3 valores —
+  exactamente la causa de la mayor pérdida medida. Se implementó la spec
+  corregida contra la realidad operativa, no el paquete — detalle completo
+  en `contexto/AUDITORIA_RTB-INV-01.md`, incluidos dos hallazgos
+  encontrados en el propio diseño (no en el paquete): un hueco de
+  autorización al extender el kardex, y un `GRANT INSERT` sin restringir
+  que habría permitido forjar un conteo ya cerrado. Seis migraciones
+  nuevas (`009_inventario_catalogo.sql` … `014_inventario_kpis.sql`, ~21
+  tablas), verificadas contra Supabase real con el rol Postgres
+  `authenticated` (no sólo como superusuario): vista ciega por privilegio
+  de columna, bloqueo de saldo negativo, cross-dock sin pareja fallando en
+  el `COMMIT`, máquina de estados de conteo con firmas obligatorias,
+  autoaprobación de ajuste estructuralmente imposible, `get_advisors` sin
+  `ERROR`. Capa de API (~35 rutas) y UI (~14 páginas) verificadas con
+  `npx tsc --noEmit` de forma incremental tras cada archivo, no sólo al
+  final. Base de datos sin semilla por decisión del dueño del proyecto —
+  la carga de los 1,388 SKU reales queda como entrega aparte.
 
 ## TODO
 
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
+- **RTB-INV-01 — recorrido clic a clic con sesión de rol `almacen`.** La
+  verificación de esta entrega se hizo con `super_admin` y con el rol Postgres
+  real `authenticated` por SQL, pero no con una sesión de navegador de un
+  usuario `almacen` real — la vista ciega de conteos y los `GRANT` por columna
+  sólo se prueban de verdad con el rol operativo (mismo punto donde
+  aparecieron los dos bugs reales de RTB-ENT-01, ver hallazgo 22 de
+  `AUDITORIA_RTB-ENT-01.md`). Pendiente hasta que exista un usuario de prueba
+  con ese rol.
+- **RTB-INV-01 — subida real de archivos al bucket `soportes-inventario`.**
+  El bucket y sus políticas ya están creados (`013_inventario_discrepancias_ajustes.sql`);
+  falta el flujo de `upload` con URL firmada en la UI (mismo patrón que
+  `comprobante-upload-url` de RTB-ENT-01) — por ahora la ruta del soporte se
+  guarda como texto libre. Detalle en `contexto/AUDITORIA_RTB-INV-01.md` →
+  "Fuera de alcance".
+- **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está
+  diseñado para recibirla (`estado='requiere_depuracion'`, `ubicacion_id
+  NULL`, `permite_negativo` con motivo, `origen='carga_inicial'`) pero el
+  script de importación es una entrega aparte — la base sigue sin semilla por
+  decisión explícita del dueño del proyecto.

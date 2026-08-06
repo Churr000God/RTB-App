@@ -59,6 +59,22 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `ubicacion_clasificacion` | `fisica`, `logica`, `especial` | `ubicaciones_internas` |
 | `ubicacion_uso_especial` | `cuarentena`, `devoluciones`, `material_danado`, `recepcion`, `embarque`, `picking` | `ubicaciones_internas` |
 | `cuenta_bancaria_estado` | `pendiente_aprobacion`, `activa`, `pendiente_reemplazo`, `inactiva`, `rechazada` | `proveedor_cuentas_bancarias` |
+| `unidad_tipo` | `conteo`, `agrupacion`, `longitud`, `peso`, `volumen` | `unidades_medida` |
+| `producto_estado` | `borrador`, `activo`, `requiere_depuracion`, `descontinuado`, `fusionado` | `productos` |
+| `costo_origen` | `compra`, `catalogo_manual`, `proveedor_preferente`, `carga_inicial` | `producto_costos` |
+| `precio_canal` | `refaccion`, `ariba`, `mostrador`, `lista_general` | `producto_precios_referencia` |
+| `apartado_estado` | `activo`, `liberado`, `consumido` | `inventario_apartados` |
+| `movimiento_tipo` | 8 `entrada_*` + 8 `salida_*` (ver `db/migrations/011_inventario_kardex.sql`) | `inventario_movimientos` |
+| `conteo_estado` | `planificado`, `congelado`, `en_captura`, `en_conciliacion`, `cerrado`, `aplicado`, `cancelado` | `inventario_conteos` |
+| `conteo_tipo` | `general`, `ciclico`, `por_ubicacion`, `por_familia`, `puntual`, `reconteo` | `inventario_conteos` |
+| `conteo_linea_estado` | `no_visitada`, `contada`, `recontada`, `no_localizada`, `ubicacion_incorrecta`, `bloqueada` | `inventario_conteo_detalles` |
+| `firma_rol` | `contador`, `supervisor`, `gerente_operaciones`, `testigo` | `inventario_conteo_firmas` |
+| `ajuste_estado` | `borrador`, `pendiente_autorizacion`, `autorizado`, `aplicado`, `rechazado`, `cancelado` | `inventario_ajustes`, `producto_unidad_redefiniciones` |
+| `ajuste_tipo` | `conteo`, `reubicacion`, `correccion_captura`, `redefinicion_unidad`, `carga_inicial`, `merma`, `otro` | `inventario_ajustes` |
+| `discrepancia_banda` | `documental`, `movimiento`, `regularizacion`, `sistema` | `inventario_discrepancias`, `inventario_hallazgos` |
+| `discrepancia_salida` | `ubi`, `cap`, `aju`, `aju_sin_soporte`, `justificado`, `hal`, `men` | `inventario_discrepancias` |
+| `discrepancia_estado` | `abierta`, `en_investigacion`, `con_causa`, `resuelta`, `hallazgo`, `cancelada` | `inventario_discrepancias` |
+| `hallazgo_estado` | `abierto`, `en_seguimiento`, `cerrado_con_causa`, `cerrado_sin_causa` | `inventario_hallazgos` |
 
 `profiles.role` **no** es un enum de Postgres — es `TEXT` con un `CHECK`
 (`001_auth_profiles.sql`), a propósito, para poder agregar un rol nuevo sin
@@ -83,6 +99,17 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `pcb_before_update()` | trigger | `updated_at`/`updated_by` + protege `clabe`/`proveedor_id` |
 | `proveedor_cuentas_resumen(proveedor_id?)` | tabla enmascarada | CLABE `****1234` para `direccion` |
 | `tiene_operaciones_abiertas(entidad_id)` | `boolean` | Punto de extensión para Ventas/Compras — hoy siempre `false` |
+| `movimiento_signo(tipo)` | `smallint` (`+1`/`-1`) | Signo de un tipo de movimiento de kardex |
+| `costo_unitario_vigente(producto_id, fecha?)` | `numeric` | Cascada promedio→catálogo→proveedor preferente |
+| `productos_before_insert()` / `productos_guard_unidad()` | trigger | Folio `RTB-<familia>-000123`; la unidad de medida sólo cambia vía redefinición autorizada |
+| `inventario_movimientos_before_insert()` | trigger | El trigger que hace todo: factor de conversión, lock de existencias, costo promedio, bloqueo de negativo, congelamiento, autorización de ajuste |
+| `inventario_movimientos_inmutable()` / `movimiento_valida_par()` | trigger | Kardex append-only incluso para `service_role`; cross-dock/transferencia exigen su par al `COMMIT` |
+| `inventario_congelamiento_activo(producto_id, ubicacion_id)` | `uuid` (folio de conteo o `NULL`) | Resuelve el congelamiento vigente contra el árbol de `ubicaciones_internas` |
+| `ajuste_autorizado(ajuste_id)` | `boolean` | `false` hasta que el ajuste esté `autorizado`/`aplicado` — la barrera real del kardex |
+| `conteo_conciliacion(conteo_id)` | tabla con teórico visible | La única puerta a `cantidad_teorica`/`diferencia` durante la captura — vista ciega real |
+| `inventario_exactitud(conteo_id)` | tabla (`cobertura`/`registro`/`pieza`/`valor`) | Exactitud sobre 4 bases; cobertura es la que impide un 100% ficticio |
+| `inventario_alerta_stock(producto_id?)` | tabla | Alerta ⚪/🔴/🟢, bloqueo de compra y acción sugerida (RTB-PRO-COM-01 §III) |
+| `inventario_verificar_consistencia()` | tabla | Consola de auditoría — sólo `super_admin`/`direccion`; `ajuste_sin_autorizacion` debería ser siempre 0 filas |
 
 Todas llevan `SET search_path = public, pg_temp` (evita inyección de esquema) y
 las que son sólo para disparar por trigger (`entidades_before_insert`,
@@ -106,7 +133,43 @@ erDiagram
     profiles ||--o{ ubicaciones_internas : "responsable_id"
     profiles ||--o{ solicitudes_cambio : "solicitante_id / aprobador_id"
     profiles ||--o{ audit_log : "usuario_id"
+    producto_familias ||--o{ productos : "familia_id"
+    producto_categorias ||--o{ productos : ""
+    unidades_medida ||--o{ productos : "unidad_medida_id / unidad_contenido_id"
+    productos ||--o{ productos : "producto_canonico_id (fusión)"
+    proveedores ||--o{ proveedor_productos : ""
+    productos ||--o{ proveedor_productos : ""
+    productos ||--o{ producto_costos : ""
+    productos ||--o{ inventario_existencias : ""
+    ubicaciones_internas ||--o{ inventario_existencias : ""
+    productos ||--o{ inventario_movimientos : ""
+    ubicaciones_internas ||--o{ inventario_movimientos : ""
+    inventario_conteos ||--o{ inventario_movimientos : "conteo_id"
+    inventario_ajustes ||--o{ inventario_movimientos : "ajuste_id"
+    inventario_apartados ||--o{ inventario_movimientos : ""
+    inventario_conteos ||--o{ inventario_conteo_detalles : ""
+    inventario_conteos ||--o{ inventario_conteo_asignaciones : ""
+    inventario_conteos ||--o{ inventario_congelamientos : ""
+    inventario_conteos ||--o{ inventario_conteo_firmas : ""
+    inventario_conteos ||--o{ inventario_conteo_versiones : ""
+    inventario_conteo_detalles ||--o{ inventario_discrepancias : ""
+    inventario_ajustes ||--o{ inventario_discrepancias : ""
+    inventario_hallazgos ||--o{ inventario_discrepancias : ""
+    inventario_discrepancias ||--o{ inventario_discrepancias : "discrepancia_par_id"
+    inventario_ajustes ||--o{ inventario_ajuste_lineas : ""
+    inventario_discrepancias ||--o{ inventario_ajuste_lineas : ""
+    inventario_movimientos ||--o{ inventario_ajuste_lineas : "movimiento_id"
+    productos ||--o{ producto_unidad_redefiniciones : ""
+    inventario_conteos ||--o{ producto_unidad_redefiniciones : ""
+    inventario_ajustes ||--o{ producto_unidad_redefiniciones : ""
 ```
+
+RTB-INV-01 (`db/migrations/009`…`014`) añade 21 tablas nuevas a este mismo
+esquema — su diagrama vive fusionado arriba, no aparte, porque referencia
+directamente `profiles`, `proveedores` y `ubicaciones_internas` de
+RTB-ENT-01. Detalle tabla por tabla en `contexto/RTB-INV-01_Modulo_Productos_Inventario.md`
+§2; el resumen de columnas de cada tabla nueva está más abajo, después de
+`solicitudes_cambio`.
 
 `solicitudes_cambio` y `audit_log` referencian filas de `entidades`/`clientes`/
 `proveedores` por `(tabla, registro_id)` genérico — **no** son claves foráneas
@@ -388,6 +451,262 @@ política de `UPDATE` — la resolución va siempre por la API.
 
 ---
 
+## RTB-INV-01 — Productos, Costos e Inventario
+
+Detalle completo (por qué cada decisión, veredictos frente al paquete
+original) en `contexto/AUDITORIA_RTB-INV-01.md`. Aquí sólo el resumen de
+columnas — el DDL de `db/migrations/009`…`014` manda.
+
+### `unidades_medida`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `clave` | varchar(12) | no | — | único; inmutable tras el alta |
+| `nombre` | varchar(60) | no | — | |
+| `tipo` | `unidad_tipo` | no | — | |
+| `decimales` | smallint | no | `0` | `0..4`; valida la precisión de captura en el kardex |
+| `activo` | boolean | no | `true` | |
+
+**Grants:** `INSERT` libre; `UPDATE` de `(nombre, tipo, decimales, activo)`
+— `clave` inmutable. **RLS:** 8 roles leen; `super_admin`/`direccion`/
+`compras`/`almacen` administran.
+
+### `producto_familias`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `clave` | varchar(10) | no | — | único; prefijo del folio (`RTB-<clave>-000123`) |
+| `nombre` | varchar(120) | no | — | |
+| `unidad_medida_default_id` | uuid → `unidades_medida(id)` | sí | — | |
+| `requiere_recuento` | boolean | no | `false` | bandera de gobierno para redefiniciones masivas |
+| `activo` | boolean | no | `true` | |
+
+Grants/RLS iguales a `unidades_medida`.
+
+### `producto_categorias`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `clave` | varchar(20) | no | — | único |
+| `nombre` | varchar(120) | no | — | |
+| `activo` | boolean | no | `true` | |
+
+Tabla, no enum — mismo criterio que `profiles.role`. Grants/RLS iguales a
+`unidades_medida`.
+
+### `productos`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `codigo_interno` | varchar(60) | no | trigger (`RTB-<familia>-000123`) | único **sólo** entre filas `estado='activo'` |
+| `familia_id` | uuid → `producto_familias(id)` | no | — | |
+| `sku` | varchar(80) | sí | — | número de parte del fabricante; **no** único (hay pares reales que lo comparten) |
+| `sku_normalizado` | varchar(80) generada | — | — | `upper(regexp_replace(sku, no-alfanumérico, ''))`, para cruces de catálogo |
+| `producto_canonico_id` | uuid → `productos(id)` | sí | — | fusión de duplicados; `(estado='fusionado') = (not null)` |
+| `nombre` | varchar(200) | no | — | |
+| `unidad_medida_id` | uuid → `unidades_medida(id)` | no | — | **sólo cambia vía redefinición autorizada** (`productos_guard_unidad()`) |
+| `contenido_por_unidad` | numeric(14,4) | no | `1` | `> 0` |
+| `unidad_contenido_id` | uuid → `unidades_medida(id)` | sí | — | obligatoria si `contenido_por_unidad ≠ 1` |
+| `stock_minimo` / `stock_maximo` | numeric(16,4) | sí | — | `NULL` = sin definir (alerta ⚪); sólo por API (columna de `compras`) |
+| `es_estrategico` | boolean | no | `false` | evita `bloquear_compra` aunque pasen 180 días sin movimiento |
+| `requiere_ubicacion` | boolean | no | `true` | |
+| `costo_catalogo` | numeric(14,6) | sí | — | materializado desde `producto_costos` |
+| `estado` | `producto_estado` | no | `'borrador'` | |
+
+**Índices:** único parcial de `codigo_interno`, GIN de búsqueda de texto,
+trigram de `codigo_interno`/`sku`, btree de `familia_id`/`categoria_id`/
+`unidad_medida_id`/`estado`/`producto_canonico_id`.
+
+**Grants:** `INSERT` libre; `UPDATE` de `(nombre, descripcion, marca,
+modelo, categoria_id, codigo_barras, requiere_ubicacion, observaciones)` —
+identidad, unidad de medida, `estado` y parámetros comerciales sólo por
+`service_role`. **RLS:** 8 roles leen; `super_admin`/`direccion`/`compras`/
+`almacen` administran.
+
+### `proveedor_productos`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `proveedor_id` | uuid → `proveedores(id)` | no | — | `ON UPDATE CASCADE` |
+| `producto_id` | uuid → `productos(id)` | no | — | |
+| `costo_unitario` | numeric(14,6) | no | — | `>= 0` |
+| `unidad_medida_id` / `contenido_por_unidad` | uuid / numeric(14,4) | no/no | —/`1` | el proveedor puede cotizar en una unidad distinta a la base de RTB |
+| `es_preferente` | boolean | no | `false` | único preferente activo por producto (índice parcial) |
+| `activo` | boolean | no | `true` | |
+
+**Grants:** `INSERT` libre; `UPDATE` de precio/condiciones, no de identidad.
+**RLS:** `super_admin`/`direccion`/`compras`/`finanzas` leen — **`almacen`
+no**, llega al costo por `costo_unitario_vigente()`; `super_admin`/
+`direccion`/`compras` administran.
+
+### `producto_costos`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `costo_unitario` | numeric(14,6) | no | — | `>= 0` |
+| `origen` | `costo_origen` | no | — | |
+| `vigente_desde` / `vigente_hasta` | date | no/sí | `current_date`/— | único abierto (`vigente_hasta IS NULL`) por producto |
+| `motivo` | text | sí | — | obligatorio si `vigente_desde` es pasado (carga retroactiva) |
+
+Sin `GRANT UPDATE`: una corrección es una fila nueva, nunca una edición.
+
+### `producto_precios_referencia`
+
+"Costo Refacción"/"Costo Ariba"/mostrador/lista general — vocabulario de
+Notion **sin respaldo en ningún documento de `contexto/`**; se conservan sin
+semántica de negocio. Mismo patrón de vigencia que `producto_costos`, pero
+sí con `GRANT UPDATE (precio, vigente_hasta, fuente)`.
+
+### `inventario_existencias`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `producto_id` | uuid → `productos(id)` | no | — | |
+| `ubicacion_id` | uuid → `ubicaciones_internas(id)` | sí | — | `NULL` = sin ubicación (73.9% del catálogo real hoy) |
+| `cantidad_teorica` | numeric(16,4) | no | `0` | acumulador documental — sin `CHECK` de signo (18 negativos reales) |
+| `cantidad_fisica` | numeric(16,4) | sí | — | medición del último conteo; `NULL` ≠ 0; `CHECK >= 0` (un físico negativo es imposible) |
+| `cantidad_apartada` | numeric(16,4) | no | `0` | `>= 0` |
+| `cantidad_disponible` | numeric(16,4) generada | — | — | `teorica - apartada` |
+| `costo_promedio` | numeric(14,6) | sí | — | sólo lo escribe el trigger del kardex |
+
+**Grants:** sólo `SELECT` para `authenticated` — ni `INSERT` ni `UPDATE`
+bajo ninguna circunstancia; el único escritor es
+`inventario_movimientos_before_insert()` (`SECURITY DEFINER`) y la
+aplicación de un conteo. **RLS:** 8 roles leen.
+
+### `inventario_apartados`
+
+Reservas (compromisos abiertos) — no mueve stock, no es un movimiento de
+kardex. Sobre-reservar no se bloquea a propósito; queda visible en
+`cantidad_disponible`. `estado` (`activo|liberado|consumido`);
+`liberado_at`/`liberado_por` los estampa el trigger, no el cliente.
+**RLS:** `super_admin`/`direccion`/`ventas`/`almacen` administran.
+
+### `inventario_movimientos` (kardex)
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `folio` | varchar(20) | no | trigger (`MOV-00000123`) | único |
+| `tipo` | `movimiento_tipo` | no | — | 16 valores, signo fijado por `movimiento_signo()` |
+| `unidad_captura_id` / `cantidad_capturada` | uuid / numeric(16,4) | no/no | — | lo que capturó el operador, en la unidad que traía en la mano |
+| `factor_conversion` / `unidad_base_id` / `cantidad` | numeric(16,6) / uuid / numeric(16,4) | no | trigger | congelados por el trigger — nunca los manda el cliente |
+| `costo_unitario` / `costo_promedio_posterior` / `saldo_teorico_posterior` | numeric | sí | trigger si es null | |
+| `operacion_id` | uuid | no | `gen_random_uuid()` | comparte las dos piernas de cross-dock/transferencia |
+| `conteo_id` / `ajuste_id` / `apartado_id` | uuid | sí | — | `conteo_id`/`ajuste_id` obligatorios según `tipo` (`mov_conteo_chk`/`mov_ajuste_chk`) |
+| `permite_negativo` / `motivo_negativo` | boolean / text | no/sí | `false`/— | **fuera del `GRANT INSERT`** — sólo `service_role` |
+
+**Grants:** `INSERT` por columna (lista exacta en
+`contexto/RTB-INV-01_Modulo_Productos_Inventario.md` §9); **sin `UPDATE` ni
+`DELETE` de ninguna columna, ni para `service_role`** — un trigger adicional
+lo rechaza siempre. **RLS:** 8 roles leen; `super_admin`/`direccion`/
+`almacen`/`compras`/`logistica` insertan.
+
+### `inventario_conteos`
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `folio` | varchar(16) | no | trigger (`CNT-000123`) | único |
+| `tipo` | `conteo_tipo` | no | — | |
+| `alcance` | jsonb | no | — | filtro que interpreta la API al congelar, no SQL |
+| `estado` | `conteo_estado` | no | `'planificado'` | máquina de estados, ver abajo |
+| `version` | numeric(3,1) | no | `1.0` | acta versionada, sólo `service_role` la avanza |
+| `vista_ciega` | boolean | no | `true` | |
+| `responsable_id` | uuid → `profiles(id)` | no | — | |
+
+**Máquina de estados** (`inventario_conteos_before_update()`):
+`planificado → congelado → en_captura → en_conciliacion → cerrado →
+aplicado`, con `cancelado` alcanzable desde cualquier estado no terminal.
+`cerrado` exige firma de `supervisor` **y** `gerente_operaciones`.
+
+**Grants:** `INSERT` por columna (nunca `estado` — nace `planificado`
+siempre); `UPDATE` de metadatos + `estado` (la máquina de estados valida la
+transición). **RLS:** 8 roles leen; `super_admin`/`direccion`/`almacen`
+administran.
+
+### `inventario_conteo_asignaciones`, `inventario_congelamientos`
+
+Quién cuenta qué (limitación real #6 del Acta) y el freeze que de verdad
+bloquea el kardex (limitación real #5) — ver
+`public.inventario_congelamiento_activo()`. Administran `super_admin`/
+`direccion`/`almacen`.
+
+### `inventario_conteo_detalles`
+
+Línea de conteo — **vista ciega real**: el `GRANT SELECT` **omite**
+`cantidad_teorica`, `diferencia`, `valor_diferencia`, `costo_unitario_snapshot`
+y `costo_origen`. No es un filtro de la API ni de la UI: un `SELECT *` desde
+`authenticated` literalmente no puede traer esas columnas. La única puerta
+es `conteo_conciliacion()`. `estado_conteo` (`no_visitada|contada|
+recontada|no_localizada|ubicacion_incorrecta|bloqueada`) con `CHECK` que ata
+el estado a la nulidad de `cantidad_fisica` (limitación real #1: un `0` no
+es "no visitada"). Sin `GRANT INSERT` — las líneas las genera `/congelar`
+con `service_role`. `contado_por`/`contado_at`/`recontado_por`/
+`recontado_at` los estampa el trigger, no el cliente. **RLS de `UPDATE`:**
+`super_admin`/`direccion` siempre; `almacen` sólo en su asignación activa
+(`inventario_conteo_asignaciones`) y con el conteo `en_captura`.
+
+### `inventario_conteo_versiones`, `inventario_conteo_firmas`
+
+Acta versionada real ("Versión · Corte · Qué corrigió") y firmas de cierre
+(`contador|supervisor|gerente_operaciones|testigo`). Ninguna de las dos
+tiene `GRANT UPDATE`/`DELETE` — una versión publicada o una firma no se
+editan.
+
+### `inventario_hallazgos`
+
+Diferencia sin causa identificada. **Sobrevive al cierre** del conteo que
+la originó — no se cancela con el acta. `cerrado_at`/`cerrado_por` los
+estampa el trigger. Administran `super_admin`/`direccion`/`almacen`/`compras`.
+
+### `inventario_ajustes` (CIE-AJU-01)
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `folio` | varchar(16) | no | trigger (`AJU-000123`) | único |
+| `motivo` | text | no | — | |
+| `sin_soporte` / `soporte_path` / `motivo_sin_soporte` | boolean / text / text | — | `false`/—/— | soporte exigido al salir de `borrador` (`aju_soporte_chk`) |
+| `estado` | `ajuste_estado` | no | `'borrador'` | `borrador → pendiente_autorizacion → autorizado → aplicado` (o `rechazado`/`cancelado`) |
+| `solicitante_id` / `autorizador_id` | uuid → `profiles(id)` | no/sí | `auth.uid()`/— | **`autorizador_id ≠ solicitante_id`, `CHECK`** — nadie autoriza lo suyo |
+
+**Grants:** `INSERT`/`UPDATE` restringidos a `(tipo, motivo, conteo_id,
+soporte_path, sin_soporte, motivo_sin_soporte)` — `estado` y el resto del
+ciclo de vida sólo por `service_role`; el contenido además queda congelado
+en cuanto `estado ≠ 'borrador'`. **RLS:** el solicitante ve/edita lo suyo
+(edita sólo en `borrador`); `super_admin`/`direccion`/`almacen`/`compras`
+ven todo.
+
+### `inventario_ajuste_lineas`
+
+Producto + cantidad signada (en unidad base) por línea del ajuste.
+`movimiento_id` lo llena la API al aplicar (genera el
+`inventario_movimientos` correspondiente). Ligada al estado `borrador` del
+ajuste padre y a su solicitante.
+
+### `inventario_discrepancias` (CIE-DIS-01)
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `folio` | varchar(16) | no | trigger (`DIS-000123`) | único |
+| `diferencia` / `valor_diferencia` | numeric generada | — | — | `cantidad_fisica - cantidad_teorica` (× costo) |
+| `causa_presunta` / `banda` / `salida` | text / `discrepancia_banda` / `discrepancia_salida` | sí | — | **`salida ∉ {hal,men} ⟹ banda + causa_presunta obligatorios`** (`dis_causa_chk`) |
+| `discrepancia_par_id` | uuid → `inventario_discrepancias(id)` | sí | — | Paso 0 · Reubicación; validado por trigger (mismo producto, signo opuesto) |
+| `ajuste_id` / `hallazgo_id` | uuid | sí | — | obligatorios según `salida` |
+
+**Grants:** `INSERT` restringido a columnas de captura (nunca `estado`/
+`salida`/resolución); `resuelto_at`/`resuelto_por`/`par_confirmado_*` los
+estampa el trigger. **RLS:** 8 roles leen; `super_admin`/`direccion`/
+`almacen`/`compras` administran.
+
+### `producto_unidad_redefiniciones`
+
+Única vía para cambiar `productos.unidad_medida_id`/`contenido_por_unidad`
+— `productos_guard_unidad()` rechaza cualquier otro `UPDATE`, incluso con
+`service_role`. Misma forma que un ajuste autorizado: `pendiente_autorizacion
+→ autorizado → aplicado`, `autorizador_id ≠ solicitante_id` (`CHECK`),
+`requiere_reconteo` exige `conteo_id` antes de `aplicado`.
+
+---
+
 ## Advisors de Supabase aceptados (no son bugs)
 
 `get_advisors` marca estos `WARN` de forma permanente y ya evaluada — no
@@ -400,3 +719,17 @@ política de `UPDATE` — la resolución va siempre por la API.
   información derivada del propio `auth.uid()` de quien llama.
 - Protección de contraseñas filtradas (HaveIBeenPwned) desactivada en Auth —
   ajeno a este esquema, pendiente de decisión de producto.
+- RTB-INV-01 añade a la lista de `SECURITY DEFINER` expuestas como RPC:
+  `costo_unitario_vigente`, `inventario_congelamiento_activo`,
+  `ajuste_autorizado`, `conteo_conciliacion`, `inventario_exactitud`,
+  `inventario_verificar_consistencia` — todas devuelven cero filas/`NULL`
+  para quien no está autorizado (evaluado dentro de la propia función, no
+  por RLS), mismo criterio ya aceptado para `usuarios_directorio`/
+  `proveedor_cuentas_resumen`.
+- `unindexed_foreign_keys` sobre columnas `created_by`/`updated_by`/
+  `autorizador_id`/`solicitante_id`/`aprobador`-tipo en las tablas nuevas
+  de RTB-INV-01 — mismo patrón ya aceptado desde RTB-ENT-01 (auditoría de
+  fila, no se filtra por esa columna en ninguna consulta real).
+- `unused_index` sobre las ~45 FK de negocio de RTB-INV-01 (`producto_id`,
+  `ubicacion_id`, `conteo_id`, `ajuste_id`...) — esperable con la base
+  vacía; si persiste con datos reales de producción, revisar entonces.
