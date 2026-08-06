@@ -26,7 +26,10 @@ proveedores por condición de pago) y no tenía dónde vivir. Ver
 ## Edición: libre vs. controlada
 
 - **Libre:** `plazo_pago`, `credito_autorizado`, `moneda_default` — `UPDATE`
-  directo vía RLS para `super_admin`/`direccion`/`compras`.
+  directo vía RLS para `super_admin`/`direccion`/`compras`. Los campos de
+  `entidades` (incluidas `siglas`) se editan aparte, desde la pestaña
+  "General" del detalle — ver `alta-cliente.md` → "Edición: libre vs.
+  controlada".
 - **Controlada:** `categoria`/`condicion_pago` — "categoría de proveedor:
   compras inicia, direccion aprueba" (P05 §II). Sin `GRANT UPDATE`; el
   cambio exige `POST /api/solicitudes-cambio` con

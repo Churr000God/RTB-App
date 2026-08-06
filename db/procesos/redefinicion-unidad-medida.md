@@ -64,3 +64,11 @@ haber vuelto a contar el producto bajo la unidad nueva.
 | "No puedes autorizar tu propia solicitud" | `rum_no_autoaprobacion_chk` |
 | "Esta redefinición exige un reconteo antes de aplicarse" | `requiere_reconteo=true` sin `conteo_id` vinculado |
 | Un `UPDATE` directo de `productos.unidad_medida_id` no tiene efecto o falla `42501` | `productos_guard_unidad()` — es la barrera intencional |
+
+## Pantalla
+
+`/dashboard/inventario/redefiniciones` (gap de UI cerrado 2026-08-06,
+`contexto/AUDITORIA_QA_ROLES_2026-08-06.md` §4): antes se podía
+*solicitar* una redefinición desde el detalle de producto, pero no había
+ninguna pantalla para verla, autorizarla ni aplicarla — `POST .../resolver`
+y `.../aplicar` existían y respondían, sin ningún botón que los llamara.

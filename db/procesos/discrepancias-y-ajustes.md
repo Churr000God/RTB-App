@@ -101,3 +101,24 @@ identificada.
 | "El ajuste necesita al menos una línea" | Se intentó enviar sin líneas |
 | "No puedes autorizar tu propia solicitud" | `aju_no_autoaprobacion_chk` |
 | "No se puede mover inventario con un ajuste no autorizado" | Se intentó aplicar (o el trigger del kardex detectó) un ajuste que no está `autorizado`/`aplicado` |
+
+## Pantallas
+
+Gaps de UI cerrados 2026-08-06 (`contexto/AUDITORIA_QA_ROLES_2026-08-06.md`
+§4) — las tres rutas ya existían y respondían, sin ninguna pantalla que
+las llamara:
+
+- `/dashboard/inventario/discrepancias` — antes sólo listaba y resolvía;
+  ahora también da de alta una discrepancia manual (`POST
+  /api/inventario/discrepancias`), para diferencias detectadas fuera de
+  un conteo formal.
+- `/dashboard/inventario/hallazgos` — pantalla nueva completa (listar,
+  crear, cerrar con o sin causa), con `HallazgoEstadoBadge` nuevo.
+- Soporte documental de un ajuste: antes un `<input>` de texto libre para
+  pegar la ruta a mano; ahora sube de verdad al bucket privado
+  `soportes-inventario` vía URL firmada (`POST /api/inventario/ajustes/[id]/soporte-upload-url`,
+  mismo patrón que `comprobante-upload-url` de RTB-ENT-01).
+- Selectores de producto/ubicación en las líneas de ajuste: antes
+  `<Input>` de texto libre pidiendo un UUID pegado a mano (ningún lugar
+  de la app lo mostraba para copiarlo); ahora `ProductoCombobox`
+  (`cmdk`, respaldado por `GET /api/productos?q=`) y `UbicacionSelect`.

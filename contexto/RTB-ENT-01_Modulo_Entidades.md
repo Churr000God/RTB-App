@@ -32,14 +32,15 @@ históricos se hace por SQL directo, fuera de la UI).
 Implementado en `db/migrations/002_entidades_core.sql` (núcleo),
 `003_ubicaciones_internas.sql` (árbol de ubicaciones) y
 `004_cuentas_bancarias.sql` (cuentas de proveedor) + un ajuste puntual en
-`005_solicitudes_tipo_cambio.sql`. Ese es el DDL autoritativo; lo que sigue es
-un resumen.
+`005_solicitudes_tipo_cambio.sql`, más `020_entidades_siglas.sql`
+(2026-08-06: identificador corto de la entidad, ver §2.1). Ese es el DDL
+autoritativo; lo que sigue es un resumen.
 
 ### 2.1 Tablas núcleo
 
 | Tabla | Qué es | Notas clave |
 |---|---|---|
-| `entidades` | Maestro único de clientes/proveedores/mixtas | `clave` autogenerada (`ENT-000123`), **único dueño del estado y el bloqueo** — `clientes`/`proveedores` no tienen estado propio |
+| `entidades` | Maestro único de clientes/proveedores/mixtas | `clave` autogenerada (`ENT-000123`), **único dueño del estado y el bloqueo** — `clientes`/`proveedores` no tienen estado propio. `siglas` (opcional, única, MAYÚSCULAS) identifica a la entidad de forma corta y entra al buscador |
 | `clientes` | Extensión 1:1 de una entidad con rol cliente | `limite_credito`, `vendedor_id`, `canal_origen` |
 | `proveedores` | Extensión 1:1 de una entidad con rol proveedor | `condicion_pago`, `credito_autorizado` |
 | `contactos` | Contactos de una entidad | "modificación libre" (P05, sin aprobación) |
@@ -178,7 +179,7 @@ POST         /api/solicitudes-cambio/[id]/resolver   { decision: 'aprobar'|'rech
 |---|---|
 | `/dashboard/entidades` | KPIs (total, clientes activos, proveedores activos, bloqueadas), tabs por tipo, búsqueda/filtros, tabla paginada en servidor |
 | `/dashboard/entidades/nueva` | Alta compuesta: datos generales + comerciales + contacto principal + dirección fiscal |
-| `/dashboard/entidades/[id]` | Detalle con tabs General · Contactos y direcciones · Cuenta bancaria (si aplica) · Auditoría, y acciones de bloqueo/desbloqueo |
+| `/dashboard/entidades/[id]` | Detalle con tabs General · Contactos y direcciones · Cuenta bancaria (si aplica) · Auditoría, y acciones de bloqueo/desbloqueo. La pestaña General edita in-place los campos de "modificación libre" (§4) — antes de 2026-08-06 era sólo lectura, con el `PATCH` existente pero sin pantalla que lo llamara |
 | `/dashboard/ubicaciones` | Árbol expandible + panel de detalle |
 
 Ambas entradas de navegación (`Entidades`, `Ubicaciones`) están en la nueva

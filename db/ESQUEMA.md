@@ -106,6 +106,9 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `inventario_movimientos_inmutable()` / `movimiento_valida_par()` | trigger | Kardex append-only incluso para `service_role`; cross-dock/transferencia exigen su par al `COMMIT` |
 | `inventario_congelamiento_activo(producto_id, ubicacion_id)` | `uuid` (folio de conteo o `NULL`) | Resuelve el congelamiento vigente contra el árbol de `ubicaciones_internas` |
 | `ajuste_autorizado(ajuste_id)` | `boolean` | `false` hasta que el ajuste esté `autorizado`/`aplicado` — la barrera real del kardex |
+| `inventario_congelar_conteo(conteo_id)` (`016`) | `integer` (líneas generadas) | Congela un conteo — resuelve `alcance`, genera `inventario_conteo_detalles` y `inventario_congelamientos` en una sola transacción atómica. `SECURITY DEFINER` invocada por el cliente del **propio usuario**, no `service_role` — así gana el privilegio sobre tablas con `GRANT` restringido sin perder el contexto JWT que hace que `auth.uid()` resuelva al actor real (antes: `congelado_por` violaba NOT NULL bajo `service_role`, ver `contexto/AUDITORIA_QA_ROLES_2026-08-06.md` E-01) |
+| `inventario_aplicar_conteo(conteo_id)` (`016`) | `integer` (existencias actualizadas) | Aplica un conteo `cerrado`: `UPDATE ... FROM` set-based que copia `cantidad_fisica` a `inventario_existencias`. Mismo patrón que congelar; el chequeo de rol (`super_admin`/`direccion`) vive en la función, no en la ruta (E-04) |
+| `inventario_conteos_after_update_liberar()` (`016`) | trigger `AFTER UPDATE` | Libera automáticamente los congelamientos de un conteo al pasar a `aplicado`/`cancelado` — ya no tienen motivo para seguir bloqueando el kardex (E-05) |
 | `conteo_conciliacion(conteo_id)` | tabla con teórico visible | La única puerta a `cantidad_teorica`/`diferencia` durante la captura — vista ciega real |
 | `inventario_exactitud(conteo_id)` | tabla (`cobertura`/`registro`/`pieza`/`valor`) | Exactitud sobre 4 bases; cobertura es la que impide un 100% ficticio |
 | `inventario_alerta_stock(producto_id?)` | tabla | Alerta ⚪/🔴/🟢, bloqueo de compra y acción sugerida (RTB-PRO-COM-01 §III) |
@@ -212,6 +215,7 @@ bloqueo** de todo el árbol de RTB-ENT-01.
 | `clave` | varchar(12) | no | — | único, autogenerada (`ENT-000123`), **inmutable** tras el alta |
 | `nombre_legal` | varchar(200) | no | — | "modificación controlada" (razón social) |
 | `nombre_comercial` | varchar(200) | sí | — | |
+| `siglas` | varchar(12) | sí | — | único parcial, MAYÚSCULAS (normalizada por trigger, `020`), modificación libre |
 | `tipo` | `entidad_tipo` | no | — | se promueve solo a `mixta` |
 | `persona_tipo` | `persona_tipo` | no | — | |
 | `rfc` | varchar(13) | sí | — | longitud 12/13; único salvo `XAXX010101000`/`XEXX010101000`; "modificación controlada" |
@@ -226,15 +230,15 @@ bloqueo** de todo el árbol de RTB-ENT-01.
 | `created_by` / `updated_by` | uuid → `profiles(id)` | sí | `auth.uid()` en alta | |
 | `created_at` / `updated_at` | timestamptz | no | `now()` | |
 
-**Índices:** único parcial de `rfc`, GIN de búsqueda de texto
-(`nombre_legal`/`nombre_comercial`), trigram de `clave`/`rfc`, btree de
-`estado`/`tipo`.
+**Índices:** único parcial de `rfc`, único parcial de `siglas` (`020`), GIN
+de búsqueda de texto (`nombre_legal`/`nombre_comercial`), trigram de
+`clave`/`rfc`/`siglas`, btree de `estado`/`tipo`.
 
 **Grants a `authenticated`:** `SELECT`, `INSERT` (sin restricción de
 columna — el alta necesita `nombre_legal`/`rfc`/`tipo` de una vez), `UPDATE`
 sólo de `(nombre_comercial, correo_principal, telefono_principal, sitio_web,
-observaciones)`. `nombre_legal`/`rfc`/`estado`/`bloqueo_*`/`clave` sólo por
-`service_role` (la API aplica primero la lógica de aprobación).
+observaciones, siglas)`. `nombre_legal`/`rfc`/`estado`/`bloqueo_*`/`clave`
+sólo por `service_role` (la API aplica primero la lógica de aprobación).
 
 **RLS:** `SELECT` para los 8 roles; `INSERT`/`UPDATE` para
 `super_admin`/`direccion`/`ventas`/`compras`.
@@ -255,10 +259,16 @@ observaciones)`. `nombre_legal`/`rfc`/`estado`/`bloqueo_*`/`clave` sólo por
 | `canal_origen` | `canal_origen` | sí | — | |
 
 **Grants:** `SELECT`/`INSERT` libres; `UPDATE` de `(dias_credito, dias_gracia,
-lista_precio, descuento_maximo, vendedor_id, canal_origen)`.
-`limite_credito` **no** es de escritura directa — sólo `service_role`.
-**RLS:** `SELECT` para los 8 roles; `INSERT`/`UPDATE` para
-`super_admin`/`direccion`/`ventas`.
+lista_precio, descuento_maximo, vendedor_id, canal_origen, limite_credito)`
+— `limite_credito` se agregó en `019_clientes_limite_credito_grant.sql`
+(gap encontrado corrigiendo `contexto/AUDITORIA_QA_ROLES_2026-08-06.md`
+E-07: faltaba por completo, así que ni `super_admin` podía aplicar
+directo un cambio de crédito ya autorizado). Es seguro porque RLS
+(`clientes_update`) ya limita `UPDATE` a `super_admin`/`direccion`/
+`ventas`, y en la práctica sólo `super_admin` ejecuta directo — el resto
+sigue pasando por `solicitudes_cambio` cuando supera
+`UMBRAL_APROBACION_CREDITO` ($100,000). **RLS:** `SELECT` para los 8
+roles; `INSERT`/`UPDATE` para `super_admin`/`direccion`/`ventas`.
 
 ---
 
@@ -548,6 +558,45 @@ identidad, unidad de medida, `estado` y parámetros comerciales sólo por
 `service_role`. **RLS:** 8 roles leen; `super_admin`/`direccion`/`compras`/
 `almacen` administran.
 
+### `producto_imagenes` (`021`)
+
+Fotos de catálogo de un producto, 0..N con una principal. El binario vive
+en el bucket **público** `productos-imagenes` (ver "Buckets de Storage"
+más abajo); esta tabla sólo guarda la ruta y metadatos derivados del
+archivo real (nunca de lo que declare el cliente).
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `producto_id` | uuid → `productos(id)` | no | — | `ON DELETE RESTRICT` |
+| `path` / `miniatura_path` | varchar(500) | `path` no, miniatura sí | — | ruta DENTRO del bucket, nunca la URL completa |
+| `es_principal` | boolean | no | `false` | como máximo una activa por producto (índice único parcial); la sostienen los triggers, fuera del `GRANT` |
+| `orden` | integer | no | `0` | `>= 0` |
+| `descripcion` | varchar(300) | sí | — | texto alternativo / pie de foto |
+| `mime` | varchar(100) | no | — | `image/jpeg`, `image/png` o `image/webp` |
+| `bytes` | integer | no | — | `> 0` y `<= 5242880` (5 MB — espejo del `file_size_limit` del bucket) |
+| `ancho` / `alto` | integer | sí | — | |
+| `activo` | boolean | no | `true` | baja lógica; el binario sí se borra del bucket (ver comentario de tabla) |
+
+**Invariante "como máximo una principal activa":** índice único parcial
+`(producto_id) where es_principal and activo`. "Al menos una si hay
+activas" lo sostienen dos triggers `SECURITY DEFINER`
+(`producto_imagenes_principal_before/after`). Promover una imagen ya
+existente **no** se hace con un `UPDATE` de una sola sentencia — un bug
+real de interacción de triggers (documentado en el historial de
+`CLAUDE.md`, 2026-08-06, y en `022`/`023`) lo hace chocar contra el índice
+— se hace vía `producto_imagen_marcar_principal(uuid)` (`023`,
+`SECURITY DEFINER`, sólo `service_role`), que demueve y promueve en dos
+sentencias top-level separadas.
+
+**Grants:** `INSERT` restringido a `(producto_id, path, miniatura_path,
+descripcion, mime, bytes, ancho, alto, orden)` — `es_principal`/`activo`/
+`created_by` fuera a propósito (gotcha de `inventario_conteos`, 012).
+`UPDATE` restringido a `(descripcion, orden)`; `es_principal` sólo vía la
+función anterior, `activo` sólo por `service_role` (borrar una imagen
+también borra el objeto del bucket). Sin `DELETE`. **RLS:** 8 roles leen;
+`super_admin`/`direccion`/`compras`/`almacen` administran (espejo de
+`productos`).
+
 ### `proveedor_productos`
 
 | Columna | Tipo | Null | Default | Restricción |
@@ -653,21 +702,39 @@ administran.
 Quién cuenta qué (limitación real #6 del Acta) y el freeze que de verdad
 bloquea el kardex (limitación real #5) — ver
 `public.inventario_congelamiento_activo()`. Administran `super_admin`/
-`direccion`/`almacen`.
+`direccion`/`almacen`. `GRANT INSERT` de `inventario_congelamientos`
+restringido por columna (`016`, corrección de
+`contexto/AUDITORIA_QA_ROLES_2026-08-06.md`): `congelado_at`/`congelado_por`
+quedan fuera — un `authenticated` no puede forjar quién/cuándo congeló al
+alta manual (`POST .../congelamientos`); usan su `DEFAULT`
+(`now()`/`auth.uid()`). La liberación (`UPDATE (motivo_liberacion)`)
+puede ser manual (pantalla del detalle del conteo) o automática al pasar
+el conteo a `aplicado`/`cancelado` (`inventario_conteos_after_update_liberar()`).
 
 ### `inventario_conteo_detalles`
 
 Línea de conteo — **vista ciega real**: el `GRANT SELECT` **omite**
 `cantidad_teorica`, `diferencia`, `valor_diferencia`, `costo_unitario_snapshot`
 y `costo_origen`. No es un filtro de la API ni de la UI: un `SELECT *` desde
-`authenticated` literalmente no puede traer esas columnas. La única puerta
-es `conteo_conciliacion()`. `estado_conteo` (`no_visitada|contada|
-recontada|no_localizada|ubicacion_incorrecta|bloqueada`) con `CHECK` que ata
-el estado a la nulidad de `cantidad_fisica` (limitación real #1: un `0` no
-es "no visitada"). Sin `GRANT INSERT` — las líneas las genera `/congelar`
-con `service_role`. `contado_por`/`contado_at`/`recontado_por`/
-`recontado_at` los estampa el trigger, no el cliente. **RLS de `UPDATE`:**
-`super_admin`/`direccion` siempre; `almacen` sólo en su asignación activa
+`authenticated` literalmente no puede traer esas columnas — `*` exige
+SELECT sobre *todas* las columnas de la tabla, así que la ruta de
+captura debe pedir la lista explícita de columnas concedidas
+(`CONTEO_DETALLE_COLUMNAS_CAPTURA`, `app/lib/inventario/config.ts`), no
+`select('*')` (bug real, no de `GRANT` ausente, corregido en
+`contexto/AUDITORIA_QA_ROLES_2026-08-06.md` E-02 — el `GRANT` sí existía).
+La única puerta al teórico es `conteo_conciliacion()`. `estado_conteo`
+(`no_visitada|contada|recontada|no_localizada|ubicacion_incorrecta|
+bloqueada`) con `CHECK` que ata el estado a la nulidad de
+`cantidad_fisica` (limitación real #1: un `0` no es "no visitada").
+`cantidad_fisica` la calcula `conteo_detalles_before_update()`
+(`cantidad_capturada` × factor de conversión de unidad, `017`) — no
+existía ese cálculo hasta corregir E-02 (enmascarado por el propio E-02:
+nadie llegaba vivo hasta intentar capturar). Sin `GRANT INSERT` — las
+líneas las genera `inventario_congelar_conteo()` (`SECURITY DEFINER`,
+`016`, invocada por el cliente del propio usuario, no `service_role`).
+`contado_por`/`contado_at`/`recontado_por`/`recontado_at` los estampa el
+trigger, no el cliente. **RLS de `UPDATE`:** `super_admin`/`direccion`
+siempre; `almacen` sólo en su asignación activa
 (`inventario_conteo_asignaciones`) y con el conteo `en_captura`.
 
 ### `inventario_conteo_versiones`, `inventario_conteo_firmas`
@@ -729,6 +796,30 @@ estampa el trigger. **RLS:** 8 roles leen; `super_admin`/`direccion`/
 `service_role`. Misma forma que un ajuste autorizado: `pendiente_autorizacion
 → autorizado → aplicado`, `autorizador_id ≠ solicitante_id` (`CHECK`),
 `requiere_reconteo` exige `conteo_id` antes de `aplicado`.
+
+---
+
+## Buckets de Storage
+
+| Bucket | Visibilidad | Límite | MIME | Acceso | Escritura |
+|---|---|---|---|---|---|
+| `comprobantes-bancarios` (`004`) | Privado | 10 MB | pdf/jpeg/png | URL firmada 60s (`.../comprobante`) | `service_role` tras `requireApiRole` |
+| `soportes-inventario` (`013`) | Privado | 10 MB | pdf/jpeg/png | URL firmada 60s | `service_role` tras `requireApiRole` |
+| `productos-imagenes` (`021`) | **Público** | 5 MB | jpeg/png/webp | URL pública permanente (`lib/storage/publico.ts`) | `service_role` tras `requireApiRole` |
+
+Regla de cuándo usar cuál: archivo con dato de un tercero o evidencia
+contable (comprobante, factura, identificación) → bucket **privado** +
+URL firmada. Foto de catálogo, sin dato confidencial, que debe seguir
+funcionando dentro de un PDF/impresión/correo archivado (una URL firmada
+caduca) → bucket **público**, con rutas UUID impredecibles como única
+mitigación de "descubrimiento" y cero políticas de escritura para
+`authenticated` sobre `storage.objects` en cualquiera de los tres casos —
+sólo `service_role` escribe, siempre detrás de la capa de API.
+
+`productos-imagenes` es el primer bucket público del repo; ver Gotchas de
+`CLAUDE.md` para la justificación completa y el detalle de por qué
+`NEXT_PUBLIC_SUPABASE_URL` sólo se lee en servidor para construir estas
+URLs, nunca en código `'use client'`.
 
 ---
 

@@ -49,8 +49,17 @@ avisar (ver `contexto/AUDITORIA_RTB-ENT-01.md`, hallazgo 6/9).
 dos clases de cambio:
 
 - **Libre** (cualquier rol con acceso de escritura): `nombre_comercial`,
-  `correo_principal`, `telefono_principal`, `sitio_web`, `observaciones`.
-  Va con el cliente del propio usuario, la política RLS de `UPDATE` decide.
+  `correo_principal`, `telefono_principal`, `sitio_web`, `observaciones`,
+  `siglas`. Va con el cliente del propio usuario, la política RLS de
+  `UPDATE` decide. Estos seis campos se editan desde la pestaña "General"
+  del detalle de la entidad (`app/app/dashboard/entidades/[id]/entidad-detalle.tsx`,
+  botón "Editar" junto a "Datos generales").
+- **`siglas`** (opcional, ej. "TMEX", "AT&T"): identificador corto de la
+  entidad, normalizado a MAYÚSCULAS por el mismo trigger que rfc/curp,
+  único cuando no es nulo (`020_entidades_siglas.sql`). Entra al buscador
+  de `/dashboard/entidades` junto a razón social/clave/RFC, y alimenta el
+  avatar del detalle cuando existe (si no, se calculan iniciales de la
+  razón social).
 - **Controlada** (`nombre_legal`/`rfc`): sólo `super_admin` puede tocarlos
   directo desde esta misma ruta (usa el cliente admin, porque esas dos
   columnas no tienen `GRANT UPDATE` para `authenticated`). Cualquier otro rol

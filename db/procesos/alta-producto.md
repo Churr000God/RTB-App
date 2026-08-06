@@ -66,6 +66,25 @@ producto como `estado='fusionado'` apuntando a su canónico
 historial de kardex intacto; el catálogo debe empezar a referenciar el
 canónico hacia adelante.
 
+## Fotos del producto (`021_producto_imagenes.sql`, 2026-08-06)
+
+Desde la pestaña "Imágenes" del detalle (`producto-detalle.tsx`),
+`super_admin`/`direccion`/`compras`/`almacen` pueden subir hasta 10 fotos
+por producto (JPG/PNG/WebP, 5 MB máx. cada una). El botón "Subir fotos"
+(`components/inventario/imagen-uploader.tsx`) redimensiona la imagen en el
+navegador con `<canvas>` antes de subirla (lado largo 1600px + una
+miniatura de 400px), corrigiendo de paso la rotación EXIF de fotos de
+celular. `POST /api/productos/[id]/imagenes` recibe el archivo por
+`FormData` — no por URL firmada — y guarda el objeto en el bucket
+**público** `productos-imagenes`: la URL es permanente y sigue
+funcionando dentro de un PDF, una impresión o un correo archivado, algo
+que una URL firmada no garantiza. La primera foto que se sube nace
+"principal" automáticamente; se puede cambiar la principal, reordenar o
+quitar una foto desde la misma pestaña (quitar borra también el archivo
+del bucket, no sólo la fila). La galería de `/dashboard/productos`
+(toggle junto al buscador) usa la foto principal de cada producto; los
+que no tienen foto muestran un ícono de caja.
+
 ## Qué puede fallar
 
 | Síntoma | Causa |
@@ -74,3 +93,15 @@ canónico hacia adelante.
 | "Si el contenido por unidad no es 1, indica la unidad del contenido" | `productos_unidad_contenido_chk` |
 | 403 al editar `stock_minimo`/`stock_maximo`/`es_estrategico` | Tu rol no es `super_admin`/`direccion`/`compras` |
 | La unidad de medida no cambia con un `PATCH` directo | Es la barrera intencional — usa `/redefinir-unidad` |
+| "Formato no admitido (¿HEIC de iPhone?...)" al subir una foto | `createImageBitmap` no decodifica HEIC fuera de Safari — cambiar la cámara del iPhone a "Más compatible" o convertir a JPG antes de subir |
+| "Para cambiar la imagen principal, marca otra imagen como principal" | El PATCH de imágenes rechaza `es_principal: false` explícito a propósito — despromover sin promover otra dejaría al producto sin principal |
+
+## Costo de catálogo — pantalla (gap de UI cerrado 2026-08-06)
+
+Pestaña "Costos" del detalle de producto: histórico de vigencias +
+formulario de alta (`POST /api/productos/[id]/costos`, roles `super_admin`/
+`direccion`/`compras`/`finanzas`). Antes la ruta existía y respondía sin
+ningún botón que la llamara (`contexto/AUDITORIA_QA_ROLES_2026-08-06.md`
+§4). Carga retroactiva exige `motivo` (`pc_retroactivo_chk`); sólo una
+fila puede quedar sin `vigente_hasta` a la vez
+(`uq_producto_costos_abierto`).

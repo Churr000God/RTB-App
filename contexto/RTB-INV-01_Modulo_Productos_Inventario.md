@@ -60,6 +60,7 @@ lectura). Ese es el DDL autoritativo; lo que sigue es un resumen.
 | `producto_categorias` | Taxonomía comercial | Tabla, no enum — cambia sin `ALTER TYPE` |
 | `producto_marcas` | Catálogo de marcas | Añadida en `015`; sustituye a `productos.marca` (texto libre) — evita que "BOSCH"/"Bosch"/"bosch " convivan como tres marcas distintas |
 | `productos` | Catálogo maestro | `codigo_interno` (único sólo si `estado='activo'`) y `sku` (número de parte del fabricante, **no** único) son identificadores independientes |
+| `producto_imagenes` | Fotos de catálogo, 0..N con una principal | Añadida en `021` (2026-08-06); binario en el bucket **público** `productos-imagenes` (primero del repo — el resto son privados con URL firmada), alimenta la vista de galería de `/dashboard/productos` |
 | `proveedor_productos` | Lista de precios de compra por proveedor | Cierra el pendiente declarado en `AUDITORIA_RTB-ENT-01.md` |
 | `producto_costos` | Costo de catálogo, con vigencia | Cargable retroactivamente, con motivo obligatorio |
 | `producto_precios_referencia` | "Costo Refacción"/"Costo Ariba"/mostrador/lista general | Vocabulario de Notion sin semántica de negocio, ver §5 |
@@ -289,9 +290,9 @@ GET          /api/inventario/consistencia            sólo super_admin/direccion
 
 | Ruta | Contenido |
 |---|---|
-| `/dashboard/productos` | KPIs (total, activos, requieren depuración, sin ubicación, sin costo), búsqueda/filtros, tabla paginada |
+| `/dashboard/productos` | KPIs (total, activos, requieren depuración, sin ubicación, sin costo), búsqueda/filtros, tabla paginada. Toggle tabla ↔ galería (2026-08-06) — la galería muestra la foto principal de cada producto |
 | `/dashboard/productos/nuevo` | Alta: identidad, unidad de medida (con aviso de causa #1), ubicación |
-| `/dashboard/productos/[id]` | Detalle con tabs General · Existencias · Kardex · Costos |
+| `/dashboard/productos/[id]` | Detalle con tabs General · Imágenes · Existencias · Kardex · Costos. "Imágenes" (2026-08-06) sube fotos con redimensionado en el navegador, marca principal, reordena y quita |
 | `/dashboard/productos/[id]/redefinir-unidad` | Solicitud de redefinición de unidad de medida |
 | `/dashboard/catalogos` | Añadida en `015`: administración con pestañas Familias · Categorías · Marcas · Unidades de medida |
 | `/dashboard/inventario` | Existencias con filtros reales (sin ubicación, sin costo, teórico negativo, nunca contada) |

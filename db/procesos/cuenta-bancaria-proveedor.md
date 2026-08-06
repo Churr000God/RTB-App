@@ -83,3 +83,13 @@ sólo produce filas si `current_user_role()` está en
 | "CLABE inválida (dígito verificador incorrecto)" | `clabeValida()` — no es sólo cuestión de longitud |
 | 403 / 0 filas para `compras` o cualquier otro rol | Comportamiento esperado — P03 lo exige |
 | No aparece nada para `direccion` aunque hay cuentas | Está viendo el resumen enmascarado, revisar `enmascarado: true` en la respuesta |
+
+## Pantalla de alta (gap de UI cerrado 2026-08-06)
+
+Pestaña "Cuenta bancaria" del detalle de entidad (proveedor), visible
+sólo para `finanzas`/`super_admin`: formulario con subida real del
+comprobante al bucket privado `comprobantes-bancarios` vía URL firmada
+(`POST .../comprobante-upload-url` → `uploadToSignedUrl` del cliente
+del propio usuario → `POST /api/proveedores/[id]/cuentas` con el `path`
+resultante). Antes la ruta existía y respondía sin ningún formulario que
+la llamara (`contexto/AUDITORIA_QA_ROLES_2026-08-06.md` §4).

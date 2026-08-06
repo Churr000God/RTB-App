@@ -81,3 +81,15 @@ especial de datos") o si no está bloqueada.
 | 403 "No puedes aprobar tu propia solicitud" | `solicitante_id === auth.userId` |
 | 409 "Esta solicitud ya fue resuelta" | Doble clic / carrera entre dos aprobadores |
 | 409 "La entidad tiene operaciones abiertas" | `tiene_operaciones_abiertas()` — hoy nunca debería pasar |
+
+## Pantalla
+
+`/dashboard/solicitudes` (`super_admin`/`direccion` — gap de UI cerrado
+2026-08-06, `contexto/AUDITORIA_QA_ROLES_2026-08-06.md` §4): antes
+`POST /api/solicitudes-cambio/[id]/resolver` existía y respondía sin
+ninguna pantalla que lo llamara — una solicitud pendiente real de la
+campaña de QA (bloqueo temporal de un proveedor) era invisible salvo por
+SQL directo. Como `registro_id` es polimórfico (`entidades`/`clientes`/
+`proveedores` según `tabla`), la ruta `GET /api/solicitudes-cambio`
+resuelve el nombre de la entidad server-side antes de responder, en vez
+de dejar que la pantalla repita ese join condicional.

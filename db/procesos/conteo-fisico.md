@@ -39,9 +39,18 @@ producto_ids? }`. Nace en `planificado` — `estado` no está en el `GRANT INSER
 
 ## 2. Congelar
 
-`POST /api/inventario/conteos/[id]/congelar` (con `service_role`, porque
-genera líneas en `inventario_conteo_detalles`, tabla sin `GRANT INSERT` para
-`authenticated`):
+`POST /api/inventario/conteos/[id]/congelar` invoca
+`inventario_congelar_conteo()` (función `SECURITY DEFINER`,
+`016_qa_correcciones.sql`) **con el cliente del propio usuario**, no
+`service_role` — corrección de E-01 de `contexto/AUDITORIA_QA_ROLES_2026-08-06.md`:
+`service_role` no lleva JWT, así que `auth.uid()` resolvía NULL contra la
+columna NOT NULL `congelado_por`. La función gana el privilegio que
+necesita sobre `inventario_conteo_detalles`/`inventario_congelamientos`
+(tablas sin `GRANT INSERT` completo para `authenticated`) sin salir del
+contexto JWT, así que la autoría queda correcta. Es además una sola
+llamada RPC — atómica — a diferencia de las 4 escrituras HTTP sueltas que
+tenía la implementación original (esas dejaban líneas huérfanas en
+`inventario_conteo_detalles` si fallaba a mitad de camino).
 
 1. Resuelve `alcance` contra `inventario_existencias` (ubicaciones
    descendientes por prefijo de `codigo`, familia, o productos explícitos;
@@ -83,6 +92,19 @@ indistinguible de un cero **por diseño**, no por convención de UI.
 (`conteo_detalles_before_update()`), no el payload del cliente — nadie
 puede atribuirle un conteo a otra persona.
 
+El mismo trigger calcula `cantidad_fisica` (`cantidad_capturada` × factor
+de conversión entre `unidad_captura_id` y la unidad base del producto,
+`017_conteo_captura_conversion.sql`) — antes no existía ese cálculo
+(bug encontrado al corregir E-02 de `AUDITORIA_QA_ROLES_2026-08-06.md`,
+enmascarado por el propio E-02: nadie llegaba vivo hasta intentar
+capturar). La ruta `GET .../detalles` pide la lista explícita de columnas
+concedidas (`CONTEO_DETALLE_COLUMNAS_CAPTURA`,
+`app/lib/inventario/config.ts`), nunca `select('*')` — `*` exige SELECT
+sobre *todas* las columnas de la tabla, y como el `GRANT` de esta tabla
+está restringido por columna (es la propia vista ciega), eso fallaba con
+`permission denied for table` para cualquier rol. El fix no es ampliar el
+`GRANT`: eso expondría el teórico al capturista.
+
 ## 5. Conciliar
 
 `GET /api/inventario/conteos/[id]/conciliacion` → `conteo_conciliacion()`,
@@ -109,12 +131,22 @@ desalineada de forma detectable.
 
 ## 7. Aplicar
 
-`POST /api/inventario/conteos/[id]/aplicar` copia `cantidad_fisica` a
-`inventario_existencias` para cada línea con una medición válida.
-**No ajusta el teórico** — "una diferencia sin causa identificada no se
+`POST /api/inventario/conteos/[id]/aplicar` invoca
+`inventario_aplicar_conteo()` (mismo patrón que congelar — `SECURITY
+DEFINER` con el cliente del propio usuario, no `service_role`; corrección
+de E-03/E-04): un `UPDATE ... FROM` set-based que copia `cantidad_fisica`
+a `inventario_existencias` para cada línea con una medición válida. **No
+ajusta el teórico** — "una diferencia sin causa identificada no se
 ajusta: se declara como hallazgo" (Registro de Discrepancias real). Ajustar
 el teórico exige un `inventario_ajustes` autorizado aparte, ver
-`db/procesos/discrepancias-y-ajustes.md`.
+`db/procesos/discrepancias-y-ajustes.md`. El chequeo de rol
+(`super_admin`/`direccion`) vive en la propia función, no sólo en la
+ruta — así ningún otro camino HTTP puede evadirlo (antes, el botón
+genérico de transición de estado permitía a `almacen` "aplicar" sin pasar
+por esta ruta). Al terminar, un trigger `AFTER UPDATE` libera
+automáticamente cualquier congelamiento que siga activo sobre ese
+conteo — un conteo aplicado ya no tiene motivo para seguir bloqueando el
+kardex.
 
 ## Qué puede fallar
 

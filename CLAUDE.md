@@ -229,6 +229,55 @@ corrigió).
   inicio de ese archivo. Al añadir un tipo/variante nuevo a una columna
   cerrada por `CHECK`, repasar **todas** las reglas de autorización que
   dependen de esa columna, no sólo las que el nuevo tipo obviamente toca.
+- **Primer bucket público del repo (`productos-imagenes`, 021).**
+  `comprobantes-bancarios` y `soportes-inventario` son privados con URL
+  firmada de 60s — para fotos de catálogo eso no sirve: una URL firmada
+  caduca, así que rompería cualquier PDF/impresión/correo en cuanto se
+  archiva. Regla derivada: archivo con dato de un tercero (comprobante,
+  factura, identificación) → bucket privado + URL firmada; foto de
+  catálogo (nada confidencial) → bucket público con rutas UUID
+  impredecibles y cero políticas de escritura para `authenticated` en
+  `storage.objects` (sólo `service_role`, siempre tras `requireApiRole`).
+- **`NEXT_PUBLIC_SUPABASE_URL` no llega al stage `builder` del Dockerfile.**
+  `.dockerignore` excluye los `.env` y ese stage no declara ningún
+  `ARG`/`ENV` para inyectarla — en un build de producción real, cualquier
+  `process.env.NEXT_PUBLIC_*` leído en código `'use client'` quedaría
+  `undefined` en el bundle (Next lo inlina en build time, no en runtime).
+  Con `docker compose up` (target `dev`, variables por `env_file` en
+  runtime) nunca se nota. Preexistente desde el módulo de Auth
+  (`lib/supabase/client.ts` ya lo enmascara con `?? ''`), pero
+  `lib/storage/publico.ts` (021) lo vuelve explícito: **toda URL pública
+  de Storage se construye en servidor** y viaja resuelta en el payload de
+  la API, nunca se arma en el cliente. Pendiente de reportar aparte al
+  dueño del proyecto — afecta también al login de la imagen `runner`.
+- **`nullif(upper(btrim(...)), '')` es obligatorio al normalizar una
+  columna con índice único parcial.** `btrim('')` da `''`, que NO es
+  `NULL` — sin el `nullif`, dos filas capturadas con el campo vacío
+  chocan contra el índice único (`entidades.siglas`, 020). RFC/CURP no
+  tienen este problema porque no llevan índice único parcial; en cuanto
+  una columna opcional SÍ lo lleva, hace falta el `nullif`, no basta con
+  el patrón `if x is not null then upper(btrim(x))` que ya usan RFC/CURP.
+- **Invariante "una sola fila marcada" con partial unique index NO se
+  resuelve con un UPDATE anidado dentro del BEFORE trigger de la MISMA
+  fila que se está promoviendo.** Descubierto verificando
+  `producto_imagenes` (021): el trigger BEFORE de `es_principal=true`
+  degradaba a la hermana con un `UPDATE` anidado, pero un AFTER trigger
+  mal alcanzado (escuchaba también cambios de `es_principal`, no sólo de
+  `activo`) veía el estado transitorio "cero principales" a media
+  operación y repromovía a la hermana antes de que la fila original
+  terminara de escribirse → choque real con el índice único. Fix en dos
+  partes: (1) el AFTER trigger de auto-recuperación sólo debe reaccionar
+  a `activo` (una deactivación genuina), nunca a `es_principal` solo; (2)
+  un swap explícito (demover-then-promover) necesita DOS sentencias
+  top-level separadas — `producto_imagen_marcar_principal()` (023) las
+  ejecuta como statements distintos dentro de una función, no como un
+  único `UPDATE` que confía en el trigger para degradar a la hermana.
+  Ver `022_producto_imagenes_after_fix.sql` y `023_producto_imagen_marcar_principal.sql`
+  para el diagnóstico completo. Regla general: cualquier "exactamente una
+  fila marcada por grupo" con partial unique index + trigger de
+  auto-recuperación necesita probarse con el ciclo completo (promover
+  mientras otra ya es principal, no sólo el caso de alta), no basta con
+  que el `INSERT` simple funcione.
 
 ## Historial de decisiones
 
@@ -330,25 +379,79 @@ corrigió).
   (incluida la denegación cruzada: `almacen` ya no puede dar de alta una
   familia ni una unidad), `get_advisors` sin `ERROR` nuevo, y
   `docker build --target builder` con TypeScript real.
+- **2026-08-06** — Siglas en entidades + imágenes de producto con vista de
+  galería. Dos pedidos del dueño del proyecto: (1) localizar clientes por
+  siglas, no sólo por razón social/RFC/clave; (2) fotos de catálogo,
+  aprovechadas en una vista de galería junto a la de tabla en
+  `/dashboard/productos`. Dos migraciones para (1)
+  (`020_entidades_siglas.sql` — el nombre de archivo se corrió de 018 a
+  020 porque trabajo concurrente sin commitear de la corrección de
+  auditoría QA ya había tomado el número 018/019 en disco; el nombre
+  registrado en Supabase sigue siendo "018_entidades_siglas", sólo la
+  etiqueta difiere del archivo local) y tres para (2)
+  (`021_producto_imagenes.sql`, `022_producto_imagenes_after_fix.sql`,
+  `023_producto_imagen_marcar_principal.sql`). `productos-imagenes` es el
+  **primer bucket público** del repo — justificación y regla derivada en
+  Gotchas. La verificación de `producto_imagenes` encontró un bug real de
+  interacción entre triggers antes de que hubiera imágenes reales en
+  riesgo (022/023, detalle en Gotchas) — el patrón "promover una imagen a
+  principal con un `UPDATE` de una sola sentencia" chocaba con el índice
+  único por una repromoción prematura del AFTER trigger, no por las
+  columnas fuera del `GRANT` (esas sí funcionaron a la primera). Además:
+  edición de datos generales de entidad (antes sólo lectura: el `PATCH`
+  de `/api/entidades/[id]` existía sin que ninguna pantalla lo llamara).
+  Verificado contra Supabase real simulando `authenticated` por rol
+  (normalización con `nullif`, duplicado de siglas, `42501` al forjar
+  `es_principal` en el `INSERT`, ciclo completo de promover/desactivar/
+  reactivar sin choque de índice, RLS del bucket), `get_advisors` sin
+  `ERROR` nuevo, `docker build --target builder` con TypeScript real, y
+  clic a clic en la app real (alta con siglas, búsqueda por siglas,
+  edición de datos generales con persistencia confirmada por SQL directo,
+  subida real de una imagen con redimensionado por `canvas`, miniatura en
+  cabecera y en la galería del listado). El recorrido de UI compartió el
+  navegador con la sesión concurrente de corrección de auditoría QA
+  (cookies de Supabase Auth por origen, no por pestaña) — el rol activo
+  cambiaba solo entre pasos; se verificó cada resultado contra la base de
+  datos por SQL directo en vez de confiar sólo en la pantalla.
+- **2026-08-06** — Corrección completa de la campaña de QA por rol
+  (`contexto/AUDITORIA_QA_ROLES_2026-08-06.md`): los 11 errores (E-01 a
+  E-11), las 9 mejoras (M-01 a M-09) y los 8 gaps de UI de §4 de ese
+  documento. Detalle completo en
+  `contexto/CORRECCION_QA_ROLES_2026-08-06.md`. Lo más importante: la
+  causa raíz real de los tres S1 de Conteos Físicos (E-01/E-02/E-03) —
+  las rutas `congelar`/`aplicar` usaban `createSupabaseAdminClient()`
+  (`service_role`, sin JWT) para saltarse el `GRANT` restringido de las
+  tablas de conteo, pero eso deja `auth.uid()` en NULL y rompe la
+  autoría; la corrección de fondo (`016_qa_correcciones.sql`) fue mover
+  la lógica a funciones `SECURITY DEFINER` invocadas por el cliente del
+  propio usuario, no ampliar privilegios de `service_role` — mismo patrón
+  que ya usaba `inventario_congelamiento_activo()`. De paso se corrigió
+  la propia causa raíz que la auditoría atribuye a E-02 (decía "sin
+  ningún GRANT"; el GRANT sí existía, restringido por columna — el bug
+  real era un `select('*')` que exige *todas* las columnas) y se
+  encontraron dos bugs no documentados en la auditoría original,
+  enmascarados por E-01/E-02: `inventario_conteo_detalles.cantidad_fisica`
+  nunca se calculaba al capturar (`017_conteo_captura_conversion.sql`), y
+  "Asignar capturista" mandaba `familia_id`/`ubicacion_id` ambos `null`,
+  algo que `asg_alcance_chk` siempre habría rechazado. También se
+  implementó la subida real al bucket `soportes-inventario` (URL firmada,
+  mismo patrón que `comprobante-upload-url` de RTB-ENT-01 — cierra ese
+  TODO) y la de cuenta bancaria de proveedor. Verificado con simulación
+  de rol real por SQL, clic a clic con sesiones reales de `almacen` y
+  `direccion` (circuito completo de un conteo nuevo, `CNT-000012`, de
+  principio a fin — cierra el TODO pendiente de probar RTB-INV-01 con rol
+  `almacen`), y `docker build --target builder` con TypeScript real. Los
+  datos QA atascados de la campaña se limpiaron desde la app real
+  (liberar congelamiento, aplicar `AJU-000004`, aprobar la solicitud
+  pendiente), no por SQL — verificación en sí misma de las pantallas
+  nuevas de §4. Esta sesión trabajó en paralelo con la de siglas/imágenes
+  de producto (entrada anterior) sobre el mismo repositorio; se verificó
+  que ningún archivo tocado por ambas perdiera cambios de la otra.
 
 ## TODO
 
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
-- **RTB-INV-01 — recorrido clic a clic con sesión de rol `almacen`.** La
-  verificación de esta entrega se hizo con `super_admin` y con el rol Postgres
-  real `authenticated` por SQL, pero no con una sesión de navegador de un
-  usuario `almacen` real — la vista ciega de conteos y los `GRANT` por columna
-  sólo se prueban de verdad con el rol operativo (mismo punto donde
-  aparecieron los dos bugs reales de RTB-ENT-01, ver hallazgo 22 de
-  `AUDITORIA_RTB-ENT-01.md`). Pendiente hasta que exista un usuario de prueba
-  con ese rol.
-- **RTB-INV-01 — subida real de archivos al bucket `soportes-inventario`.**
-  El bucket y sus políticas ya están creados (`013_inventario_discrepancias_ajustes.sql`);
-  falta el flujo de `upload` con URL firmada en la UI (mismo patrón que
-  `comprobante-upload-url` de RTB-ENT-01) — por ahora la ruta del soporte se
-  guarda como texto libre. Detalle en `contexto/AUDITORIA_RTB-INV-01.md` →
-  "Fuera de alcance".
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está
   diseñado para recibirla (`estado='requiere_depuracion'`, `ubicacion_id
   NULL`, `permite_negativo` con motivo, `origen='carga_inicial'`) pero el
