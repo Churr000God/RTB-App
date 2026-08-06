@@ -19,13 +19,14 @@ export async function GET(request: Request) {
     const estado = searchParams.get('estado');
     const familiaId = searchParams.get('familia_id');
     const categoriaId = searchParams.get('categoria_id');
+    const marcaId = searchParams.get('marca_id');
     const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
     let query = supabase
       .from('productos')
-      .select('*', { count: 'exact' })
+      .select('*, producto_marcas(clave, nombre)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
 
@@ -33,9 +34,24 @@ export async function GET(request: Request) {
     else query = query.neq('estado', 'fusionado');
     if (familiaId) query = query.eq('familia_id', familiaId);
     if (categoriaId) query = query.eq('categoria_id', categoriaId);
+    if (marcaId) query = query.eq('marca_id', marcaId);
     if (q) {
       const like = `%${q.replace(/[%_]/g, '')}%`;
-      query = query.or(`nombre.ilike.${like},codigo_interno.ilike.${like},sku.ilike.${like}`);
+      const ors = [`nombre.ilike.${like}`, `codigo_interno.ilike.${like}`, `sku.ilike.${like}`];
+
+      // marca ya no es texto en productos (015): se resuelve contra
+      // producto_marcas por nombre o clave y se añade como marca_id.in(…).
+      // Mejor que antes: exacta por marca, no ILIKE contra texto sucio.
+      // .limit(50) acota la URL de PostgREST; los UUID no llevan comas ni
+      // paréntesis, no hace falta citarlos.
+      const { data: marcasHit } = await supabase
+        .from('producto_marcas')
+        .select('id')
+        .or(`nombre.ilike.${like},clave.ilike.${like}`)
+        .limit(50);
+      if (marcasHit?.length) ors.push(`marca_id.in.(${marcasHit.map((m) => m.id).join(',')})`);
+
+      query = query.or(ors.join(','));
     }
 
     const { data, error, count } = await query;

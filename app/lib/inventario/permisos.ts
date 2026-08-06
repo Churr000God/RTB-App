@@ -1,7 +1,10 @@
 import type { UserRole } from '@/types/database';
 
 export type RecursoInventario =
-  | 'catalogos'
+  | 'catalogo_unidades'
+  | 'catalogo_familias'
+  | 'catalogo_categorias'
+  | 'catalogo_marcas'
   | 'productos'
   | 'proveedor_productos'
   | 'producto_costos'
@@ -35,8 +38,28 @@ type Accion = 'select' | 'insert' | 'update';
  *  - 'firmas': insert sólo con firmante_id = tu propio uid.
  */
 const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
-  catalogos: {
-    // unidades_medida / producto_familias / producto_categorias
+  // 015_catalogo_marcas_y_gobierno.sql estrechó unidades/familias: 'almacen'
+  // sale del insert/update. La unidad de medida mal definida es la causa #1
+  // de pérdida medida por RTB (14/27 folios de no conformidad, -$37,919.77,
+  // ver 009) y la familia es su unidad de gobierno — quien las define no
+  // debe ser quien opera el conteo contra ellas. Categorías y marcas sí
+  // quedan con 'almacen': es quien recibe mercancía nueva y clasifica.
+  catalogo_unidades: {
+    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    insert: ['super_admin', 'direccion', 'compras'],
+    update: ['super_admin', 'direccion', 'compras'],
+  },
+  catalogo_familias: {
+    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    insert: ['super_admin', 'direccion', 'compras'],
+    update: ['super_admin', 'direccion', 'compras'],
+  },
+  catalogo_categorias: {
+    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    insert: ['super_admin', 'direccion', 'compras', 'almacen'],
+    update: ['super_admin', 'direccion', 'compras', 'almacen'],
+  },
+  catalogo_marcas: {
     select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     update: ['super_admin', 'direccion', 'compras', 'almacen'],
@@ -126,6 +149,14 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
 export function puede(rol: UserRole | null | undefined, recurso: RecursoInventario, accion: Accion): boolean {
   if (!rol) return false;
   return MATRIZ[recurso]?.[accion]?.includes(rol) ?? false;
+}
+
+/** Lista de roles habilitados para `recurso`/`accion` — usada por las rutas
+ *  de /api/catalogos como argumento de requireApiRole(), derivada del mismo
+ *  espejo que gatea los botones de la UI. Lista vacía ⇒ requireApiRole([])
+ *  deniega a todos: fallo cerrado, que es el correcto. */
+export function rolesQuePueden(recurso: RecursoInventario, accion: Accion): UserRole[] {
+  return MATRIZ[recurso]?.[accion] ?? [];
 }
 
 /** Roles que pueden AUTORIZAR un ajuste o una redefinición de unidad — la

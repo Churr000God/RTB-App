@@ -8,7 +8,7 @@ import { puede } from '@/lib/inventario/permisos';
 import { ProductoEstadoBadge } from '@/components/inventario/estado-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { Producto, ProductoEstado } from '@/types/inventario';
+import type { ProductoConMarca, ProductoEstado } from '@/types/inventario';
 import { PRODUCTO_ESTADOS } from '@/types/inventario';
 import { PRODUCTO_ESTADO_LABELS } from '@/lib/inventario/config';
 import { AlertTriangle, Loader2, MapPinOff, Package, Plus, Search } from 'lucide-react';
@@ -22,7 +22,7 @@ interface Kpis {
 }
 
 interface Props {
-  initialData: Producto[];
+  initialData: ProductoConMarca[];
   initialCount: number;
   pageSize: number;
   kpis: Kpis;
@@ -124,7 +124,7 @@ export function ProductosExplorer({ initialData, initialCount, pageSize, kpis }:
           <div className="relative flex-1 min-w-[220px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Buscar por nombre, código interno o SKU..."
+              placeholder="Buscar por nombre, código interno, SKU o marca..."
               value={q}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
               onKeyDown={(e: React.KeyboardEvent) => e.key === 'Enter' && aplicarFiltro({ q })}
@@ -180,7 +180,7 @@ export function ProductosExplorer({ initialData, initialCount, pageSize, kpis }:
                     {p.descripcion && <p className="text-xs text-muted-foreground truncate max-w-md">{p.descripcion}</p>}
                   </td>
                   <td className="py-3 px-4 text-xs tabular-nums">{p.sku ?? '—'}</td>
-                  <td className="py-3 px-4 text-xs">{p.marca ?? '—'}</td>
+                  <td className="py-3 px-4 text-xs">{p.producto_marcas?.nombre ?? '—'}</td>
                   <td className="py-3 px-4">
                     <ProductoEstadoBadge estado={p.estado} />
                   </td>

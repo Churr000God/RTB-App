@@ -58,6 +58,7 @@ lectura). Ese es el DDL autoritativo; lo que sigue es un resumen.
 | `unidades_medida` | Catálogo de unidades con precisión decimal | Sustituye al `CHECK` cerrado del paquete — causa #1 de pérdida medida, ver §5 |
 | `producto_familias` | Agrupación gobernante de la unidad de medida | `RTB-<clave>-000001` es el prefijo del folio de producto |
 | `producto_categorias` | Taxonomía comercial | Tabla, no enum — cambia sin `ALTER TYPE` |
+| `producto_marcas` | Catálogo de marcas | Añadida en `015`; sustituye a `productos.marca` (texto libre) — evita que "BOSCH"/"Bosch"/"bosch " convivan como tres marcas distintas |
 | `productos` | Catálogo maestro | `codigo_interno` (único sólo si `estado='activo'`) y `sku` (número de parte del fabricante, **no** único) son identificadores independientes |
 | `proveedor_productos` | Lista de precios de compra por proveedor | Cierra el pendiente declarado en `AUDITORIA_RTB-ENT-01.md` |
 | `producto_costos` | Costo de catálogo, con vigencia | Cargable retroactivamente, con motivo obligatorio |
@@ -97,7 +98,8 @@ siempre Postgres.
 
 | Recurso | Select | Insert | Update |
 |---|---|---|---|
-| Catálogos (unidad/familia/categoría) | 8 roles | `super_admin`/`direccion`/`compras`/`almacen` | igual |
+| Catálogos: unidad/familia | 8 roles | `super_admin`/`direccion`/`compras` (**sin** `almacen` desde `015`) | igual |
+| Catálogos: categoría/marca | 8 roles | `super_admin`/`direccion`/`compras`/`almacen` | igual |
 | Productos | 8 roles | `super_admin`/`direccion`/`compras`/`almacen` | igual (libre); `stock_minimo`/`stock_maximo`/`es_estrategico` sólo por API |
 | Proveedor↔producto | `super_admin`/`direccion`/`compras`/`finanzas` (**no** `almacen`) | `super_admin`/`direccion`/`compras` | igual |
 | Costo de catálogo | 8 roles | `super_admin`/`direccion`/`compras`/`finanzas` | — (sin `UPDATE`; una corrección es una fila nueva) |
@@ -235,7 +237,7 @@ Mismo patrón que RTB-ENT-01: `requireApiRole([...])` → validación zod →
 lógica de negocio → `{ error: string }` en español o el recurso directo.
 
 ```
-GET/POST     /api/catalogos/[tipo]                 tipo ∈ unidades-medida|familias|categorias
+GET/POST     /api/catalogos/[tipo]                 tipo ∈ unidades-medida|familias|categorias|marcas
 PATCH        /api/catalogos/[tipo]/[id]
 GET/POST     /api/productos
 GET/PATCH    /api/productos/[id]
@@ -291,6 +293,7 @@ GET          /api/inventario/consistencia            sólo super_admin/direccion
 | `/dashboard/productos/nuevo` | Alta: identidad, unidad de medida (con aviso de causa #1), ubicación |
 | `/dashboard/productos/[id]` | Detalle con tabs General · Existencias · Kardex · Costos |
 | `/dashboard/productos/[id]/redefinir-unidad` | Solicitud de redefinición de unidad de medida |
+| `/dashboard/catalogos` | Añadida en `015`: administración con pestañas Familias · Categorías · Marcas · Unidades de medida |
 | `/dashboard/inventario` | Existencias con filtros reales (sin ubicación, sin costo, teórico negativo, nunca contada) |
 | `/dashboard/inventario/conteos` | Lista de conteos con exactitud |
 | `/dashboard/inventario/conteos/nuevo` | Planificación: tipo, alcance, responsable/supervisor |
@@ -302,7 +305,8 @@ GET          /api/inventario/consistencia            sólo super_admin/direccion
 | `/dashboard/inventario/ajustes/[id]` | Detalle: líneas, soporte, enviar, autorizar/rechazar, aplicar |
 
 Todas las entradas de navegación viven en la nueva sección "Inventario" de
-`app/lib/rbac/config.ts`, más "Productos" añadido a "Datos maestros".
+`app/lib/rbac/config.ts`, más "Productos" y "Catálogos" añadidos a "Datos
+maestros".
 
 ## 11. Reglas de negocio (vigentes)
 

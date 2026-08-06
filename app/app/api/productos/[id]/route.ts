@@ -40,7 +40,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
   }
 }
 
-// PATCH - edición libre (nombre/descripción/marca/…) por RLS directa, y
+// PATCH - edición libre (nombre/descripción/marca_id/…) por RLS directa, y
 // edición "comercial" (stock_minimo/stock_maximo/es_estrategico) por API
 // con service_role: son de 'compras' y un GRANT de Postgres no distingue
 // rol de negocio dentro de 'authenticated' — mismo criterio que

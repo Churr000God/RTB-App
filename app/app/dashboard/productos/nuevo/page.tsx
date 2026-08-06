@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, AlertCircle, CheckCircle2, Loader2, Package } from 'lucide-react';
-import type { ProductoCategoria, ProductoFamilia, UnidadMedida } from '@/types/inventario';
+import type { ProductoCategoria, ProductoFamilia, ProductoMarca, UnidadMedida } from '@/types/inventario';
 
 const initialForm = {
   familia_id: '',
@@ -15,7 +15,7 @@ const initialForm = {
   sku: '',
   nombre: '',
   descripcion: '',
-  marca: '',
+  marca_id: '',
   modelo: '',
   categoria_id: '',
   codigo_barras: '',
@@ -30,20 +30,25 @@ export default function NuevoProductoPage() {
   const [form, setForm] = useState(initialForm);
   const [familias, setFamilias] = useState<ProductoFamilia[]>([]);
   const [categorias, setCategorias] = useState<ProductoCategoria[]>([]);
+  const [marcas, setMarcas] = useState<ProductoMarca[]>([]);
   const [unidades, setUnidades] = useState<UnidadMedida[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     void (async () => {
-      const [f, c, u] = await Promise.all([
-        fetch('/api/catalogos/familias').then((r) => r.json()),
-        fetch('/api/catalogos/categorias').then((r) => r.json()),
-        fetch('/api/catalogos/unidades-medida').then((r) => r.json()),
+      const [f, c, m, u] = await Promise.all([
+        fetch('/api/catalogos/familias'),
+        fetch('/api/catalogos/categorias'),
+        fetch('/api/catalogos/marcas'),
+        fetch('/api/catalogos/unidades-medida'),
       ]);
-      setFamilias(f.data ?? []);
-      setCategorias(c.data ?? []);
-      setUnidades(u.data ?? []);
+      // res.ok comprobado antes de leer data: un 403 sin esto se vuelve una
+      // lista vacía silenciosa (mismo gotcha que audit_log en RTB-ENT-01).
+      if (f.ok) setFamilias((await f.json()).data ?? []);
+      if (c.ok) setCategorias((await c.json()).data ?? []);
+      if (m.ok) setMarcas((await m.json()).data ?? []);
+      if (u.ok) setUnidades((await u.json()).data ?? []);
     })();
   }, []);
 
@@ -67,7 +72,7 @@ export default function NuevoProductoPage() {
         sku: form.sku || undefined,
         nombre: form.nombre,
         descripcion: form.descripcion || undefined,
-        marca: form.marca || undefined,
+        marca_id: form.marca_id || undefined,
         modelo: form.modelo || undefined,
         categoria_id: form.categoria_id || undefined,
         codigo_barras: form.codigo_barras || undefined,
@@ -141,7 +146,14 @@ export default function NuevoProductoPage() {
               <Input value={form.descripcion} onChange={set('descripcion')} />
             </Campo>
             <Campo label="Marca">
-              <Input value={form.marca} onChange={set('marca')} />
+              <select value={form.marca_id} onChange={set('marca_id')} className="w-full text-sm border border-border rounded-lg px-3 py-2">
+                <option value="">Sin marca</option>
+                {marcas.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.clave} — {m.nombre}
+                  </option>
+                ))}
+              </select>
             </Campo>
             <Campo label="Modelo">
               <Input value={form.modelo} onChange={set('modelo')} />

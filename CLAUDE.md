@@ -302,6 +302,34 @@ corrigió).
   `npx tsc --noEmit` de forma incremental tras cada archivo, no sólo al
   final. Base de datos sin semilla por decisión del dueño del proyecto —
   la carga de los 1,388 SKU reales queda como entrega aparte.
+- **2026-08-06** — Catálogo de marcas + pantalla de administración de
+  catálogos + semilla mínima. El dueño del proyecto notó que no había dónde
+  dar de alta categorías, familias ni marcas — la investigación mostró dos
+  problemas distintos: familias/categorías/unidades ya eran tablas reales
+  con RLS y GRANT (009) pero sin ninguna pantalla que las administrara, y
+  `productos.marca` era texto libre sin FK ni normalización (`BOSCH`/
+  `Bosch`/`bosch ` convivían como tres marcas distintas). Se verificó
+  además que la base estaba completamente vacía (0 productos, 0 familias,
+  0 categorías, 0 unidades) — el formulario de alta de producto tenía sus
+  tres `<select>` sin nada que ofrecer, así que **no se podía dar de alta
+  ni un producto**. Una migración (`015_catalogo_marcas_y_gobierno.sql`):
+  tabla `producto_marcas` calcada de `producto_categorias`, `productos.
+  marca_id` FK nullable sustituyendo a `marca` (con el índice GIN de
+  búsqueda rehecho — se verificó primero que ningún `tsvector`/`tsquery` se
+  emite desde la app, así que el costo real fue cero), estrechamiento de
+  `unidades_medida`/`producto_familias` para sacar a `almacen` del
+  INSERT/UPDATE (la unidad de medida mal definida es la causa #1 de pérdida
+  medida, ver auditoría; `producto_categorias` no se tocó), y semilla de 6
+  unidades + 10 familias (las claves ya documentadas en 009; los nombres
+  largos son una propuesta a confirmar por el dueño del proyecto, editable
+  después desde la pantalla nueva). Nueva pantalla `/dashboard/catalogos`
+  con pestañas Familias · Categorías · Marcas · Unidades de medida,
+  dirigida por un descriptor compartido (`lib/inventario/catalogos.ts`) que
+  también usan las rutas de API — un catálogo nuevo se registra en un solo
+  lugar. Verificado contra Supabase real simulando `authenticated` por rol
+  (incluida la denegación cruzada: `almacen` ya no puede dar de alta una
+  familia ni una unidad), `get_advisors` sin `ERROR` nuevo, y
+  `docker build --target builder` con TypeScript real.
 
 ## TODO
 
@@ -324,5 +352,8 @@ corrigió).
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está
   diseñado para recibirla (`estado='requiere_depuracion'`, `ubicacion_id
   NULL`, `permite_negativo` con motivo, `origen='carga_inicial'`) pero el
-  script de importación es una entrega aparte — la base sigue sin semilla por
-  decisión explícita del dueño del proyecto.
+  script de importación es una entrega aparte. La base ya no está sin
+  semilla del todo — `015_catalogo_marcas_y_gobierno.sql` (2026-08-06)
+  sembró 6 unidades de medida y 10 familias para desbloquear el alta de
+  producto — pero sigue sin los productos en sí; eso es lo que queda
+  pendiente aquí.

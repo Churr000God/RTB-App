@@ -3,33 +3,38 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
+import { resolverCatalogoTipo, type CatalogoTipo } from '@/lib/inventario/catalogos';
+import { rolesQuePueden } from '@/lib/inventario/permisos';
 import {
   categoriaCreateSchema,
   familiaCreateSchema,
+  marcaCreateSchema,
   unidadMedidaCreateSchema,
 } from '@/lib/inventario/schemas';
 
-// Los tres catálogos de apoyo del submódulo (unidades_medida,
-// producto_familias, producto_categorias) comparten exactamente el mismo
-// esqueleto de ruta — se resuelven aquí por [tipo] en vez de en tres
-// archivos casi idénticos. GRANT INSERT de las tres tablas es sin
-// restricción de columna (009_inventario_catalogo.sql); sólo el UPDATE
-// congela la clave — eso vive en [id]/route.ts.
-const TABLAS: Record<string, { tabla: string; orden: string; schema: any }> = {
-  'unidades-medida': { tabla: 'unidades_medida', orden: 'clave', schema: unidadMedidaCreateSchema },
-  familias: { tabla: 'producto_familias', orden: 'clave', schema: familiaCreateSchema },
-  categorias: { tabla: 'producto_categorias', orden: 'clave', schema: categoriaCreateSchema },
+// Los cuatro catálogos de apoyo del submódulo (unidades_medida,
+// producto_familias, producto_categorias, producto_marcas) comparten
+// exactamente el mismo esqueleto de ruta — se resuelven aquí por [tipo] en
+// vez de en cuatro archivos casi idénticos. `tabla`/`recurso` vienen del
+// descriptor compartido (lib/inventario/catalogos.ts); el schema de zod se
+// mantiene aquí, no en el descriptor, para no arrastrar zod al bundle de
+// cliente que también importa ese archivo. Record<CatalogoTipo, …> obliga
+// a TypeScript a exhaustividad: un 5º catálogo no compila hasta que se
+// registre aquí.
+const SCHEMAS: Record<CatalogoTipo, any> = {
+  'unidades-medida': unidadMedidaCreateSchema,
+  familias: familiaCreateSchema,
+  categorias: categoriaCreateSchema,
+  marcas: marcaCreateSchema,
 };
 
-function resolverTipo(tipo: string) {
-  return TABLAS[tipo] ?? null;
-}
-
-// GET - listado plano (los 8 roles consultan). ?activo=false incluye inactivos.
+// GET - listado plano (los 8 roles consultan). ?activo=false incluye
+// inactivos (la pantalla de administración lo usa así; el formulario de
+// alta de producto usa el default y sólo ve activos).
 export async function GET(request: Request, { params }: { params: { tipo: string } }) {
   try {
-    const resolved = resolverTipo(params.tipo);
-    if (!resolved) return NextResponse.json({ error: 'Catálogo desconocido' }, { status: 404 });
+    const meta = resolverCatalogoTipo(params.tipo);
+    if (!meta) return NextResponse.json({ error: 'Catálogo desconocido' }, { status: 404 });
 
     const { response } = await requireApiRole();
     if (response) return response;
@@ -38,7 +43,7 @@ export async function GET(request: Request, { params }: { params: { tipo: string
     const soloActivos = searchParams.get('activo') !== 'false';
 
     const supabase = createSupabaseServerClient();
-    let query = supabase.from(resolved.tabla).select('*').order(resolved.orden, { ascending: true });
+    let query = supabase.from(meta.tabla).select('*').order(meta.orden, { ascending: true });
     if (soloActivos) query = query.eq('activo', true);
 
     const { data, error } = await query;
@@ -50,23 +55,25 @@ export async function GET(request: Request, { params }: { params: { tipo: string
   }
 }
 
-// POST - alta. compras/almacen administran el catálogo físico y de costos
-// (mismo criterio que las políticas RLS de 009).
+// POST - alta. Roles derivados de la misma matriz que gatea la UI
+// (lib/inventario/permisos.ts) — RLS sigue siendo la barrera real.
 export async function POST(request: Request, { params }: { params: { tipo: string } }) {
   try {
-    const resolved = resolverTipo(params.tipo);
-    if (!resolved) return NextResponse.json({ error: 'Catálogo desconocido' }, { status: 404 });
+    const tipo = params.tipo as CatalogoTipo;
+    const meta = resolverCatalogoTipo(tipo);
+    if (!meta) return NextResponse.json({ error: 'Catálogo desconocido' }, { status: 404 });
 
-    const { response } = await requireApiRole(['super_admin', 'direccion', 'compras', 'almacen']);
+    const { response } = await requireApiRole(rolesQuePueden(meta.recurso, 'insert'));
     if (response) return response;
 
-    const parsed = resolved.schema.safeParse(await request.json().catch(() => null));
+    const schema = SCHEMAS[tipo];
+    const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos' }, { status: 400 });
     }
 
     const supabase = createSupabaseServerClient();
-    const { data, error } = await supabase.from(resolved.tabla).insert(parsed.data).select('*').single();
+    const { data, error } = await supabase.from(meta.tabla).insert(parsed.data).select('*').single();
 
     if (error) {
       const duplicado = /duplicate key|unique/i.test(error.message);

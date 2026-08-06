@@ -160,6 +160,19 @@ export interface ProductoCategoria {
   updated_at: string;
 }
 
+/** 015_catalogo_marcas_y_gobierno.sql — sustituye a productos.marca (texto libre). */
+export interface ProductoMarca {
+  id: string;
+  clave: string;
+  nombre: string;
+  descripcion: string | null;
+  activo: boolean;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Producto {
   id: string;
   codigo_interno: string;
@@ -169,7 +182,7 @@ export interface Producto {
   producto_canonico_id: string | null;
   nombre: string;
   descripcion: string | null;
-  marca: string | null;
+  marca_id: string | null;
   modelo: string | null;
   categoria_id: string | null;
   codigo_barras: string | null;
@@ -188,6 +201,12 @@ export interface Producto {
   created_at: string;
   updated_at: string;
 }
+
+/** Producto con el embed PostgREST `producto_marcas(clave,nombre)` — la
+ *  forma que devuelve GET /api/productos tras 015 (ver route.ts). */
+export type ProductoConMarca = Producto & {
+  producto_marcas: Pick<ProductoMarca, 'clave' | 'nombre'> | null;
+};
 
 // ---------- Filas de tabla — 010: costos ----------
 

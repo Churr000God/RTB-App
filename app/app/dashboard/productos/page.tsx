@@ -16,7 +16,7 @@ export default async function ProductosPage() {
   const [{ data, count }, total, activos, requierenDepuracion, sinUbicacion, sinCosto] = await Promise.all([
     supabase
       .from('productos')
-      .select('*')
+      .select('*, producto_marcas(clave, nombre)')
       .neq('estado', 'fusionado')
       .order('created_at', { ascending: false })
       .range(0, PAGE_SIZE - 1),

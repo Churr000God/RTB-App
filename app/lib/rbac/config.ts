@@ -15,6 +15,7 @@ import {
   ClipboardCheck,
   AlertTriangle,
   FileEdit,
+  Library,
 } from 'lucide-react';
 import { type NavSection, type NavItem } from '@/types/navigation';
 import { USER_ROLES, type UserRole } from '@/types/database';
@@ -74,6 +75,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Productos',
         href: '/dashboard/productos',
         icon: Package,
+        roles: 'all',
+      },
+      {
+        label: 'Catálogos',
+        href: '/dashboard/catalogos',
+        icon: Library,
         roles: 'all',
       },
     ],

@@ -135,6 +135,7 @@ erDiagram
     profiles ||--o{ audit_log : "usuario_id"
     producto_familias ||--o{ productos : "familia_id"
     producto_categorias ||--o{ productos : ""
+    producto_marcas ||--o{ productos : "marca_id"
     unidades_medida ||--o{ productos : "unidad_medida_id / unidad_contenido_id"
     productos ||--o{ productos : "producto_canonico_id (fusión)"
     proveedores ||--o{ proveedor_productos : ""
@@ -164,7 +165,7 @@ erDiagram
     inventario_ajustes ||--o{ producto_unidad_redefiniciones : ""
 ```
 
-RTB-INV-01 (`db/migrations/009`…`014`) añade 21 tablas nuevas a este mismo
+RTB-INV-01 (`db/migrations/009`…`015`) añade 22 tablas nuevas a este mismo
 esquema — su diagrama vive fusionado arriba, no aparte, porque referencia
 directamente `profiles`, `proveedores` y `ubicaciones_internas` de
 RTB-ENT-01. Detalle tabla por tabla en `contexto/RTB-INV-01_Modulo_Productos_Inventario.md`
@@ -455,7 +456,7 @@ política de `UPDATE` — la resolución va siempre por la API.
 
 Detalle completo (por qué cada decisión, veredictos frente al paquete
 original) en `contexto/AUDITORIA_RTB-INV-01.md`. Aquí sólo el resumen de
-columnas — el DDL de `db/migrations/009`…`014` manda.
+columnas — el DDL de `db/migrations/009`…`015` manda.
 
 ### `unidades_medida`
 
@@ -469,7 +470,10 @@ columnas — el DDL de `db/migrations/009`…`014` manda.
 
 **Grants:** `INSERT` libre; `UPDATE` de `(nombre, tipo, decimales, activo)`
 — `clave` inmutable. **RLS:** 8 roles leen; `super_admin`/`direccion`/
-`compras`/`almacen` administran.
+`compras` administran (`015_catalogo_marcas_y_gobierno.sql` sacó a
+`almacen` de esta tabla y de `producto_familias`: la unidad de medida mal
+definida es la causa #1 de pérdida medida por RTB, y quien la gobierna no
+debe ser quien opera el conteo contra ella — ver auditoría).
 
 ### `producto_familias`
 
@@ -481,7 +485,8 @@ columnas — el DDL de `db/migrations/009`…`014` manda.
 | `requiere_recuento` | boolean | no | `false` | bandera de gobierno para redefiniciones masivas |
 | `activo` | boolean | no | `true` | |
 
-Grants/RLS iguales a `unidades_medida`.
+Grants iguales a `unidades_medida`. RLS: 8 roles leen; `super_admin`/
+`direccion`/`compras` administran (mismo estrechamiento que arriba).
 
 ### `producto_categorias`
 
@@ -491,8 +496,23 @@ Grants/RLS iguales a `unidades_medida`.
 | `nombre` | varchar(120) | no | — | |
 | `activo` | boolean | no | `true` | |
 
-Tabla, no enum — mismo criterio que `profiles.role`. Grants/RLS iguales a
-`unidades_medida`.
+Tabla, no enum — mismo criterio que `profiles.role`. Grants/RLS: 8 roles
+leen; `super_admin`/`direccion`/`compras`/`almacen` administran (sin
+cambios — `almacen` es quien recibe mercancía nueva y clasifica).
+
+### `producto_marcas`
+
+Añadida en `015_catalogo_marcas_y_gobierno.sql`, sustituye a
+`productos.marca` (texto libre, eliminada en la misma migración).
+
+| Columna | Tipo | Null | Default | Restricción |
+|---|---|---|---|---|
+| `clave` | varchar(20) | no | — | único; inmutable tras el alta |
+| `nombre` | varchar(120) | no | — | |
+| `descripcion` | text | sí | — | |
+| `activo` | boolean | no | `true` | |
+
+Grants/RLS iguales a `producto_categorias`.
 
 ### `productos`
 
@@ -504,6 +524,11 @@ Tabla, no enum — mismo criterio que `profiles.role`. Grants/RLS iguales a
 | `sku_normalizado` | varchar(80) generada | — | — | `upper(regexp_replace(sku, no-alfanumérico, ''))`, para cruces de catálogo |
 | `producto_canonico_id` | uuid → `productos(id)` | sí | — | fusión de duplicados; `(estado='fusionado') = (not null)` |
 | `nombre` | varchar(200) | no | — | |
+| `descripcion` | text | sí | — | |
+| `marca_id` | uuid → `producto_marcas(id)` | sí | — | sustituye a `marca` (texto libre) desde `015` |
+| `modelo` | varchar(120) | sí | — | texto libre |
+| `categoria_id` | uuid → `producto_categorias(id)` | sí | — | |
+| `codigo_barras` | varchar(60) | sí | — | |
 | `unidad_medida_id` | uuid → `unidades_medida(id)` | no | — | **sólo cambia vía redefinición autorizada** (`productos_guard_unidad()`) |
 | `contenido_por_unidad` | numeric(14,4) | no | `1` | `> 0` |
 | `unidad_contenido_id` | uuid → `unidades_medida(id)` | sí | — | obligatoria si `contenido_por_unidad ≠ 1` |
@@ -517,7 +542,7 @@ Tabla, no enum — mismo criterio que `profiles.role`. Grants/RLS iguales a
 trigram de `codigo_interno`/`sku`, btree de `familia_id`/`categoria_id`/
 `unidad_medida_id`/`estado`/`producto_canonico_id`.
 
-**Grants:** `INSERT` libre; `UPDATE` de `(nombre, descripcion, marca,
+**Grants:** `INSERT` libre; `UPDATE` de `(nombre, descripcion, marca_id,
 modelo, categoria_id, codigo_barras, requiere_ubicacion, observaciones)` —
 identidad, unidad de medida, `estado` y parámetros comerciales sólo por
 `service_role`. **RLS:** 8 roles leen; `super_admin`/`direccion`/`compras`/
@@ -733,3 +758,8 @@ estampa el trigger. **RLS:** 8 roles leen; `super_admin`/`direccion`/
 - `unused_index` sobre las ~45 FK de negocio de RTB-INV-01 (`producto_id`,
   `ubicacion_id`, `conteo_id`, `ajuste_id`...) — esperable con la base
   vacía; si persiste con datos reales de producción, revisar entonces.
+- `producto_marcas` (`015_catalogo_marcas_y_gobierno.sql`) hereda los mismos
+  dos patrones ya aceptados arriba: `created_by`/`updated_by` sin índice, e
+  `idx_marcas_activo`/`idx_productos_marca` sin uso todavía por la base
+  vacía. Verificado tras aplicar la migración: mismos WARN/INFO que sus tres
+  tablas hermanas, sin ningún `ERROR` nuevo.

@@ -16,6 +16,7 @@ import type {
   Producto,
   ProductoCategoria,
   ProductoFamilia,
+  ProductoMarca,
   UnidadMedida,
 } from '@/types/inventario';
 import { MOVIMIENTO_TIPO_LABELS } from '@/lib/inventario/config';
@@ -24,12 +25,13 @@ interface Props {
   producto: Producto;
   familia: ProductoFamilia | null;
   categoria: ProductoCategoria | null;
+  marca: ProductoMarca | null;
   unidad: UnidadMedida | null;
   existenciasIniciales: (InventarioExistencia & { ubicaciones_internas: { codigo: string; nombre: string } | null })[];
   costoVigente: number | null;
 }
 
-export function ProductoDetalle({ producto, familia, categoria, unidad, existenciasIniciales, costoVigente }: Props) {
+export function ProductoDetalle({ producto, familia, categoria, marca, unidad, existenciasIniciales, costoVigente }: Props) {
   const { role } = useAuth();
   const puedeEditar = puede(role, 'productos', 'update');
 
@@ -77,7 +79,14 @@ export function ProductoDetalle({ producto, familia, categoria, unidad, existenc
         </TabsList>
 
         <TabsContent value="general">
-          <GeneralTab producto={producto} familia={familia} categoria={categoria} unidad={unidad} puedeEditar={puedeEditar} />
+          <GeneralTab
+            producto={producto}
+            familia={familia}
+            categoria={categoria}
+            marca={marca}
+            unidad={unidad}
+            puedeEditar={puedeEditar}
+          />
         </TabsContent>
         <TabsContent value="existencias">
           <ExistenciasTab existencias={existenciasIniciales} />
@@ -97,12 +106,14 @@ function GeneralTab({
   producto,
   familia,
   categoria,
+  marca,
   unidad,
   puedeEditar,
 }: {
   producto: Producto;
   familia: ProductoFamilia | null;
   categoria: ProductoCategoria | null;
+  marca: ProductoMarca | null;
   unidad: UnidadMedida | null;
   puedeEditar: boolean;
 }) {
@@ -110,20 +121,44 @@ function GeneralTab({
   const [form, setForm] = useState({
     nombre: producto.nombre,
     descripcion: producto.descripcion ?? '',
-    marca: producto.marca ?? '',
+    marca_id: producto.marca_id ?? '',
+    categoria_id: producto.categoria_id ?? '',
     modelo: producto.modelo ?? '',
     observaciones: producto.observaciones ?? '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Los selects de marca/categoría sólo se cargan al entrar a editar — la
+  // mayoría de visitas al detalle no editan, y así no pagan dos consultas
+  // extra. Sólo activas: es un selector de asignación, no de administración.
+  const [marcas, setMarcas] = useState<ProductoMarca[]>([]);
+  const [categorias, setCategorias] = useState<ProductoCategoria[]>([]);
+
+  useEffect(() => {
+    if (!editando || marcas.length > 0 || categorias.length > 0) return;
+    void (async () => {
+      const [m, c] = await Promise.all([fetch('/api/catalogos/marcas'), fetch('/api/catalogos/categorias')]);
+      if (m.ok) setMarcas((await m.json()).data ?? []);
+      if (c.ok) setCategorias((await c.json()).data ?? []);
+    })();
+  }, [editando, marcas.length, categorias.length]);
+
   const guardar = async () => {
     setLoading(true);
     setError(null);
+    // '' → null para marca_id/categoria_id: z.string().uuid() rechaza ''
+    // (bug más probable de este cambio — quitar la marca de un producto
+    // mandaría '' y el servidor respondería "Datos inválidos").
+    const payload = {
+      ...form,
+      marca_id: form.marca_id || null,
+      categoria_id: form.categoria_id || null,
+    };
     const res = await fetch(`/api/productos/${producto.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     setLoading(false);
@@ -154,7 +189,32 @@ function GeneralTab({
             <Input value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} />
           </Campo>
           <Campo label="Marca">
-            <Input value={form.marca} onChange={(e) => setForm((f) => ({ ...f, marca: e.target.value }))} />
+            <select
+              value={form.marca_id}
+              onChange={(e) => setForm((f) => ({ ...f, marca_id: e.target.value }))}
+              className="w-full text-sm border border-border rounded-lg px-3 py-2"
+            >
+              <option value="">Sin marca</option>
+              {marcas.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.clave} — {m.nombre}
+                </option>
+              ))}
+            </select>
+          </Campo>
+          <Campo label="Categoría">
+            <select
+              value={form.categoria_id}
+              onChange={(e) => setForm((f) => ({ ...f, categoria_id: e.target.value }))}
+              className="w-full text-sm border border-border rounded-lg px-3 py-2"
+            >
+              <option value="">Sin categoría</option>
+              {categorias.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.clave} — {c.nombre}
+                </option>
+              ))}
+            </select>
           </Campo>
           <Campo label="Modelo">
             <Input value={form.modelo} onChange={(e) => setForm((f) => ({ ...f, modelo: e.target.value }))} />
@@ -178,8 +238,8 @@ function GeneralTab({
       ) : (
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
           <Dato label="Familia" valor={familia ? `${familia.clave} — ${familia.nombre}` : '—'} />
-          <Dato label="Categoría" valor={categoria?.nombre ?? '—'} />
-          <Dato label="Marca" valor={producto.marca ?? '—'} />
+          <Dato label="Categoría" valor={categoria ? `${categoria.clave} — ${categoria.nombre}` : '—'} />
+          <Dato label="Marca" valor={marca ? `${marca.clave} — ${marca.nombre}` : '—'} />
           <Dato label="Modelo" valor={producto.modelo ?? '—'} />
           <Dato
             label="Unidad de medida"

@@ -76,6 +76,22 @@ export const categoriaUpdateSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'Nada que actualizar' });
 
+// Sustituye a productos.marca (texto libre) — 015_catalogo_marcas_y_gobierno.sql.
+export const marcaCreateSchema = z.object({
+  clave: z.string().trim().toUpperCase().min(1, 'La clave es obligatoria').max(20),
+  nombre: z.string().trim().min(2, 'El nombre es obligatorio').max(120),
+  descripcion: z.string().trim().max(2000).optional().nullable(),
+  activo: z.boolean().default(true),
+});
+
+export const marcaUpdateSchema = z
+  .object({
+    nombre: z.string().trim().min(2).max(120).optional(),
+    descripcion: z.string().trim().max(2000).optional().nullable(),
+    activo: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada que actualizar' });
+
 // ---------- Productos ----------
 
 export const productoCreateSchema = z
@@ -85,7 +101,7 @@ export const productoCreateSchema = z
     sku: z.string().trim().toUpperCase().max(80).optional().nullable(),
     nombre: z.string().trim().min(2, 'El nombre es obligatorio').max(200),
     descripcion: z.string().trim().max(4000).optional().nullable(),
-    marca: z.string().trim().max(120).optional().nullable(),
+    marca_id: z.string().uuid().optional().nullable(),
     modelo: z.string().trim().max(120).optional().nullable(),
     categoria_id: z.string().uuid().optional().nullable(),
     codigo_barras: z.string().trim().max(60).optional().nullable(),
@@ -111,16 +127,17 @@ export const productoCreateSchema = z
     path: ['stock_maximo'],
   });
 
-/** Espejo EXACTO del GRANT UPDATE por columna de productos (009) —
- *  codigo_interno/sku/familia_id/estado/unidad_medida_id/contenido_por_unidad/
- *  stock_minimo/stock_maximo/es_estrategico NO están: identidad, ciclo de
- *  vida y la causa #1 de pérdida sólo cambian vía API con service_role o
- *  vía producto_unidad_redefiniciones (013). */
+/** Espejo EXACTO del GRANT UPDATE por columna de productos (009, ampliado
+ *  por 015 con marca_id en lugar de marca) — codigo_interno/sku/familia_id/
+ *  estado/unidad_medida_id/contenido_por_unidad/stock_minimo/stock_maximo/
+ *  es_estrategico NO están: identidad, ciclo de vida y la causa #1 de
+ *  pérdida sólo cambian vía API con service_role o vía
+ *  producto_unidad_redefiniciones (013). */
 export const productoUpdateLibreSchema = z
   .object({
     nombre: z.string().trim().min(2).max(200).optional(),
     descripcion: z.string().trim().max(4000).optional().nullable(),
-    marca: z.string().trim().max(120).optional().nullable(),
+    marca_id: z.string().uuid().optional().nullable(),
     modelo: z.string().trim().max(120).optional().nullable(),
     categoria_id: z.string().uuid().optional().nullable(),
     codigo_barras: z.string().trim().max(60).optional().nullable(),

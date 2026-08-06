@@ -4,6 +4,15 @@ Catálogo maestro de RTB-INV-01. Corrige al paquete original (`sku UNIQUE`,
 `unidad_medida` como `CHECK` cerrado de 3 valores) contra la realidad del
 catálogo real — ver `contexto/AUDITORIA_RTB-INV-01.md`, hallazgos 2 y 3.
 
+`familia_id` (obligatorio), `categoria_id` y `marca_id` (ambos opcionales)
+se seleccionan de catálogos administrables — ver
+`db/procesos/administracion-catalogos.md` para cómo se dan de alta esos
+valores y la diferencia entre familia (gobierna la unidad de medida) y
+categoría (taxonomía comercial libre). Antes de `015_catalogo_marcas_y_gobierno.sql`
+(2026-08-06), `marca` era texto libre en `productos` — se sustituyó por
+`marca_id` (FK a `producto_marcas`) para que "BOSCH"/"Bosch"/"bosch " dejen
+de convivir como tres marcas distintas.
+
 ## Quién puede
 
 Consultar: los 8 roles. Crear/editar libremente: `super_admin`,
