@@ -11,6 +11,10 @@ import {
   ShoppingBag,
   Building2,
   MapPinned,
+  Boxes,
+  ClipboardCheck,
+  AlertTriangle,
+  FileEdit,
 } from 'lucide-react';
 import { type NavSection, type NavItem } from '@/types/navigation';
 import { USER_ROLES, type UserRole } from '@/types/database';
@@ -65,6 +69,41 @@ export const NAV_SECTIONS: NavSection[] = [
         href: '/dashboard/ubicaciones',
         icon: MapPinned,
         roles: 'all',
+      },
+      {
+        label: 'Productos',
+        href: '/dashboard/productos',
+        icon: Package,
+        roles: 'all',
+      },
+    ],
+  },
+  {
+    title: 'Inventario',
+    items: [
+      {
+        label: 'Existencias',
+        href: '/dashboard/inventario',
+        icon: Boxes,
+        roles: 'all',
+      },
+      {
+        label: 'Conteos físicos',
+        href: '/dashboard/inventario/conteos',
+        icon: ClipboardCheck,
+        roles: ['super_admin', 'direccion', 'almacen', 'compras', 'finanzas'],
+      },
+      {
+        label: 'Discrepancias',
+        href: '/dashboard/inventario/discrepancias',
+        icon: AlertTriangle,
+        roles: ['super_admin', 'direccion', 'almacen', 'compras'],
+      },
+      {
+        label: 'Ajustes',
+        href: '/dashboard/inventario/ajustes',
+        icon: FileEdit,
+        roles: ['super_admin', 'direccion', 'almacen', 'compras'],
       },
     ],
   },
