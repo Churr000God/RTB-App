@@ -51,8 +51,21 @@ cliente. Mover un nodo (cambiar de padre) exigiría recalcular el código de
 toda su descendencia; no está implementado, es una limitación conocida.
 
 Lo que sí se edita libremente: `nombre`, `descripcion`, `responsable_id`,
-`capacidad_posiciones`, `clasificacion`, `uso_especial`, y `activo` (con la
-restricción de rol de arriba).
+`capacidad_posiciones`, `clasificacion`, `uso_especial`, `activo` (con la
+restricción de rol de arriba), y — sólo si `tipo = 'centro_operativo'` —
+dirección y coordenada (`calle`…`codigo_postal`, `referencia`, `latitud`,
+`longitud`; ver `direcciones-y-mapa.md`).
+
+## Dirección y coordenada de un centro operativo (`024_ubicaciones_geo.sql`)
+
+Sólo el nodo raíz del árbol (`tipo = 'centro_operativo'` — un almacén, una
+oficina, una sucursal) puede tener dirección postal y coordenada propias;
+una zona, pasillo, rack o posición hereda la ubicación de su centro. El
+`CHECK` `ubicaciones_geo_solo_centro_chk` lo exige en la base: si `tipo`
+no es `centro_operativo`, las 11 columnas nuevas deben ser todas `NULL` —
+no es sólo una regla de la UI. Flujo de captura, geocodificación y mapa
+compartido con las direcciones de entidades: ver
+[`direcciones-y-mapa.md`](./direcciones-y-mapa.md).
 
 ## Clasificación vs. uso especial
 
@@ -78,3 +91,5 @@ marcado explícitamente como pendiente de esa integración.
 | "La jerarquía no admite más de 5 niveles" | El padre ya está en `nivel = 5` |
 | "Ya existe una ubicación con ese segmento bajo el mismo padre" | Índice único de `segmento` entre hermanos (o entre raíces, si `parent_id IS NULL`) |
 | 403 al cambiar `activo` | El rol es `almacen` — sólo `super_admin`/`direccion` pueden activar/desactivar |
+| "Sólo un centro operativo puede tener dirección y coordenada" | Se intentó capturar `calle`/`latitud`/etc. en una zona, pasillo, rack o posición — `ubicaciones_geo_solo_centro_chk` |
+| "Captura ambas coordenadas (latitud y longitud) o ninguna" | `ubicaciones_geo_chk`, espejo de `direcciones_geo_chk` |

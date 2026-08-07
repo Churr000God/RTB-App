@@ -37,11 +37,14 @@ app/
 │   │                     # /api/entidades, /api/proveedores, /api/ubicaciones,
 │   │                     # /api/solicitudes-cambio, /api/productos, /api/catalogos,
 │   │                     # /api/proveedor-productos, /api/precios-referencia,
-│   │                     # /api/redefiniciones-unidad, /api/inventario/*, /logout
+│   │                     # /api/redefiniciones-unidad, /api/inventario/*,
+│   │                     # /api/mapa/{config,puntos}, /api/geocodificacion, /logout
 ├── components/
 │   ├── auth/             # LoginForm
 │   ├── entidades/        # EstadoBadge (RTB-ENT-01)
 │   ├── inventario/       # EstadoBadge de producto/conteo/ajuste/discrepancia (RTB-INV-01)
+│   ├── mapas/             # MapaPunto, MapaMultiple (mapbox-gl, next/dynamic ssr:false),
+│   │                     # CampoCoordenada, PropuestaDireccion
 │   ├── layout/           # Sidebar, Header, DashboardShell, AuthProvider
 │   └── ui/                # shadcn/Radix
 ├── lib/
@@ -51,8 +54,10 @@ app/
 │   ├── rbac/             # configuración de roles, permisos y hooks
 │   ├── entidades/        # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts,
 │   │                     # http.ts — capa compartida de RTB-ENT-01
-│   └── inventario/       # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts
-│                         # — capa compartida de RTB-INV-01 (reutiliza entidades/http.ts)
+│   ├── inventario/       # config.ts, permisos.ts, schemas.ts (zod), validaciones.ts
+│   │                     # — capa compartida de RTB-INV-01 (reutiliza entidades/http.ts)
+│   └── mapas/             # config.ts (tokens, server-only), mapbox.ts (Geocoding v6),
+│                         # schemas.ts — geocodificación y mapa (entidades + ubicaciones)
 ├── types/                # tipos TypeScript del sistema (database.ts, entidades.ts,
 │                         # inventario.ts)
 └── middleware.ts         # protección de rutas con Supabase SSR
@@ -278,6 +283,35 @@ corrigió).
   auto-recuperación necesita probarse con el ciclo completo (promover
   mientras otra ya es principal, no sólo el caso de alta), no basta con
   que el `INSERT` simple funcione.
+- **`mapbox-gl`, no el `maplibre-gl` que ya estaba en `package.json`.**
+  El ZIP original del módulo de Auth traía `maplibre-gl@4.7.1` sin usar en
+  ningún archivo — se detectó al implementar mapas (024). No se reutilizó:
+  los términos de servicio de Mapbox exigen consumir sus mapas/teselas con
+  su propio SDK; hacerlo desde MapLibre los incumple. `maplibre-gl` sigue
+  en `package.json`, igual de sin usar que antes — no se retiró porque
+  quitar una dependencia no solicitada no es parte de este cambio.
+- **Columnas válidas sólo para un valor de un enum → `CHECK` que exige
+  `NULL` en el resto, no sólo una regla de la UI.** Al añadir dirección +
+  coordenada a `ubicaciones_internas` (024, sólo válidas para
+  `tipo='centro_operativo'`, no para zona/pasillo/rack/posición), el
+  `CHECK` (`ubicaciones_geo_solo_centro_chk`) es la única barrera real —
+  una API llamada directo, sin pasar por la UI, se salta cualquier
+  validación de cliente. Mismo gotcha del `nullif(btrim(...), '')` que
+  `entidades.siglas` (020) reaparece aquí por la misma razón: sin
+  normalizar `''` a `NULL` en `ubicaciones_before_insert()`/
+  `_before_update()`, una cadena vacía capturada y borrada en un
+  formulario (no ausente, vacía) rompe el `CHECK` en un nodo que no es
+  centro operativo.
+- **`env_file` de `docker-compose.yml` sólo se lee al crear el
+  contenedor, no en caliente.** Editar `app/.env` con el contenedor `web`
+  ya corriendo (`docker compose up`) no le llega — se confirmó con
+  `docker compose exec web printenv`, que no mostraba ninguna variable
+  `MAPBOX_*` recién agregada al archivo. Hace falta recrearlo:
+  `docker compose up -d --force-recreate web` (no `docker compose
+  restart`, que reinicia el proceso pero no reevalúa `env_file`). Pasó al
+  activar los tokens de Mapbox (024) — cualquier variable nueva en
+  `app/.env` durante una sesión de desarrollo larga necesita este mismo
+  paso, no sólo guardar el archivo.
 
 ## Historial de decisiones
 
@@ -447,6 +481,61 @@ corrigió).
   nuevas de §4. Esta sesión trabajó en paralelo con la de siglas/imágenes
   de producto (entrada anterior) sobre el mismo repositorio; se verificó
   que ningún archivo tocado por ambas perdiera cambios de la otra.
+- **2026-08-06** — Ubicación geográfica y mapas: coordenada en direcciones
+  de entidades y en centros operativos, geocodificación con Mapbox y un
+  mapa de todos los puntos. Pedido del dueño del proyecto para poder
+  programar entregas y rutas (`contexto/RTB-PRO-RUT-01_Modulo_Rutas.md`).
+  Hallazgo de partida: `direcciones.latitud`/`longitud` ya existían desde
+  `002_entidades_core.sql` (el primer día del submódulo) pero ninguna
+  pantalla las usaba, y **no había forma de agregar o editar una dirección
+  de una entidad ya existente** — sólo se capturaba una al dar de alta la
+  entidad, y después era de sólo lectura, aunque
+  `POST`/`PATCH /api/entidades/[id]/direcciones` ya existían sin
+  consumidor de UI (mismo patrón de API-sin-pantalla que ya había pasado
+  con el `PATCH` de datos generales, entrada anterior). Una migración
+  (`024_ubicaciones_geo.sql`): 11 columnas de dirección/coordenada nuevas
+  en `ubicaciones_internas` (no existía ninguna), restringidas por
+  `ubicaciones_geo_solo_centro_chk` a sólo `tipo='centro_operativo'` — ver
+  Gotchas. Capa nueva `app/lib/mapas/` (geocodificación server-only contra
+  Mapbox Geocoding v6, `permanent=true` porque el resultado se persiste) y
+  `app/components/mapas/` (`mapbox-gl`, no el `maplibre-gl` sin usar que
+  ya estaba en `package.json` — ver Gotchas). Gestión completa de
+  direcciones (agregar/editar/archivar, antes inexistente) en la ficha de
+  entidad, sección opcional de dirección+mapa en el alta y en ubicaciones
+  internas, y `/dashboard/mapa` nuevo con todos los puntos. Decisiones
+  confirmadas con el dueño del proyecto antes de implementar: Mapbox (no
+  la alternativa gratuita de OpenStreetMap/Nominatim, por mejor calidad de
+  direcciones en México) con costo real de `permanent=true` aceptado, pin
+  arrastrable + campos de texto sincronizados, "proponer y confirmar" en
+  vez de sobrescritura automática al geocodificar. Verificado con SQL
+  simulando `almacen`/`ventas` (geo en centro operativo pasa, geo en un
+  rack rechazada, sólo latitud sin longitud rechazada, `''` normalizado a
+  `NULL`), `get_advisors` sin `ERROR` nuevo, y `docker build --target
+  builder` con TypeScript real. **Ambos tokens de Mapbox ya están activos**
+  en `app/.env` (`MAPBOX_TOKEN`/`MAPBOX_PUBLIC_TOKEN`, el dueño del
+  proyecto los proporcionó en la misma sesión) — el mapa ya no muestra el
+  aviso de "no configurado".
+- **2026-08-06 (mismo día, continuación)** — Mejoras de uso sobre
+  `/dashboard/mapa` a pedido del dueño del proyecto tras probar el mapa
+  con los tokens activos: (1) tarjeta con nombre al pasar el cursor sobre
+  un pin, sin necesidad de clic — `MapaMultipleInner` ya no liga el popup
+  con `marker.setPopup()` (eso lo abre mapbox-gl al hacer clic, compitiendo
+  con la navegación a la ficha); ahora `mouseenter`/`mouseleave` lo
+  abren/cierran a mano, con `marcadoresRef`/`popupsRef` reindexados de
+  arreglos a `Map<id, ...>` y un `activePopupRef` para que sólo haya un
+  popup abierto a la vez sin importar qué lo disparó. (2) Leyenda de
+  colores por tipo debajo de los filtros de `/dashboard/mapa` — el color
+  por tipo ya existía (`COLOR_POR_TIPO`) pero nada explicaba qué
+  significaba cada uno. (3) Buscador de pines por nombre (overlay sobre
+  el mapa, sin acentos/mayúsculas): filtra los puntos ya cargados —no
+  geocodifica direcciones nuevas, decisión explícita del dueño del
+  proyecto para no depender de otra llamada a Mapbox— y al elegir un
+  resultado hace `flyTo` + abre su popup con el mismo mecanismo del
+  hover, sin disparar la navegación a la ficha (eso sigue siendo sólo el
+  clic directo en el pin). Sin cambios de base de datos ni de API — todo
+  contra el `PuntoMapa[]` que el mapa ya recibía. De paso, gotcha nuevo
+  descubierto al activar los tokens: `env_file` de `docker-compose.yml`
+  no se relee en caliente (ver Gotchas).
 
 ## TODO
 

@@ -86,6 +86,13 @@ campo controlado (P05: "modificación libre"). Rutas:
 - "Borrar" un contacto/dirección es `PATCH { activo: false }`, nunca
   `DELETE`.
 
+Desde 2026-08-06 la pestaña "Contactos y direcciones" de la ficha
+(`/dashboard/entidades/[id]`) agrega/edita/archiva directamente — antes de
+esa fecha las rutas de arriba existían sin ninguna pantalla que las
+llamara. Una dirección también puede llevar coordenada
+(`latitud`/`longitud`) con geocodificación y mapa: ver
+[`direcciones-y-mapa.md`](./direcciones-y-mapa.md).
+
 ## Qué puede fallar
 
 | Síntoma | Causa |

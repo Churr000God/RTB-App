@@ -33,8 +33,9 @@ Implementado en `db/migrations/002_entidades_core.sql` (núcleo),
 `003_ubicaciones_internas.sql` (árbol de ubicaciones) y
 `004_cuentas_bancarias.sql` (cuentas de proveedor) + un ajuste puntual en
 `005_solicitudes_tipo_cambio.sql`, más `020_entidades_siglas.sql`
-(2026-08-06: identificador corto de la entidad, ver §2.1). Ese es el DDL
-autoritativo; lo que sigue es un resumen.
+(2026-08-06: identificador corto de la entidad, ver §2.1) y
+`024_ubicaciones_geo.sql` (2026-08-06: dirección + coordenada de un centro
+operativo, ver §5). Ese es el DDL autoritativo; lo que sigue es un resumen.
 
 ### 2.1 Tablas núcleo
 
@@ -44,10 +45,10 @@ autoritativo; lo que sigue es un resumen.
 | `clientes` | Extensión 1:1 de una entidad con rol cliente | `limite_credito`, `vendedor_id`, `canal_origen` |
 | `proveedores` | Extensión 1:1 de una entidad con rol proveedor | `condicion_pago`, `credito_autorizado` |
 | `contactos` | Contactos de una entidad | "modificación libre" (P05, sin aprobación) |
-| `direcciones` | Direcciones de una entidad | "modificación libre"; `entidad_federativa` (no "estado", para no confundir con el estado del flujo) |
+| `direcciones` | Direcciones de una entidad | "modificación libre"; `entidad_federativa` (no "estado", para no confundir con el estado del flujo); `tipo` = `fiscal\|envio\|cobro\|bodega\|sucursal\|oficina`; `latitud`/`longitud` opcionales (`numeric(10,7)`, ambas o ninguna) — en la base desde el alta pero sin UI que las usara hasta 2026-08-06, ver §7/§8 |
 | `audit_log` | Historial inmutable | Append-only: sin `GRANT UPDATE`/`DELETE` para nadie salvo `service_role` |
 | `solicitudes_cambio` | Cola de aprobación de cambios controlados | Ver §4 |
-| `ubicaciones_internas` | Árbol de centros operativos/zonas/pasillos/racks/posiciones | Profundidad flexible 1–5, ver §5 |
+| `ubicaciones_internas` | Árbol de centros operativos/zonas/pasillos/racks/posiciones | Profundidad flexible 1–5, ver §5. Un `centro_operativo` puede además tener dirección + coordenada propias (`024_ubicaciones_geo.sql`) |
 | `proveedor_cuentas_bancarias` | Cuentas bancarias de proveedor | Acceso restringido a `finanzas`/`super_admin`, ver §6 |
 
 Una entidad que da de alta un rol contrario al que ya tiene (p.ej. un cliente al
@@ -128,6 +129,15 @@ embarque|picking`) sólo aplica cuando `clasificacion='especial'`.
 `almacen` puede crear y editar ubicaciones pero **no puede activar/desactivarlas**
 — sólo `direccion`/`super_admin`.
 
+**Dirección y coordenada (`024_ubicaciones_geo.sql`, 2026-08-06):** sólo un
+`centro_operativo` (la raíz del árbol — almacén, oficina, sucursal) puede
+capturar dirección postal + `latitud`/`longitud`; una zona, pasillo, rack o
+posición hereda la ubicación de su centro y el `CHECK`
+`ubicaciones_geo_solo_centro_chk` lo hace cumplir en la base, no sólo en la
+UI. Mismo mecanismo de geocodificación que las direcciones de entidades
+(§7/§8): pin en el mapa o campos de texto, "obtener dirección de esta
+coordenada" propone y el usuario confirma antes de sobrescribir nada.
+
 ## 6. Cuentas bancarias de proveedor (P03)
 
 Control antifraude explícito: **solo `finanzas` inicia, solo `super_admin`
@@ -173,17 +183,38 @@ GET/POST     /api/solicitudes-cambio
 POST         /api/solicitudes-cambio/[id]/resolver   { decision: 'aprobar'|'rechazar', comentario_resolucion? }
 ```
 
+Geocodificación y mapa (`app/lib/mapas/`, 2026-08-06 — capa nueva, comparte
+roles con `direcciones`/`ubicaciones`, no un submódulo aparte):
+
+```
+GET   /api/mapa/config            { habilitado, token, estilo }  — token PÚBLICO (pk.) de Mapbox, tras sesión
+GET   /api/geocodificacion        ?modo=inverso&latitud=&longitud=  |  ?modo=directo&q=
+GET   /api/mapa/puntos            direcciones + centros operativos activos con coordenada, para /dashboard/mapa
+```
+
 ## 8. UI
 
 | Ruta | Contenido |
 |---|---|
 | `/dashboard/entidades` | KPIs (total, clientes activos, proveedores activos, bloqueadas), tabs por tipo, búsqueda/filtros, tabla paginada en servidor |
-| `/dashboard/entidades/nueva` | Alta compuesta: datos generales + comerciales + contacto principal + dirección fiscal |
-| `/dashboard/entidades/[id]` | Detalle con tabs General · Contactos y direcciones · Cuenta bancaria (si aplica) · Auditoría, y acciones de bloqueo/desbloqueo. La pestaña General edita in-place los campos de "modificación libre" (§4) — antes de 2026-08-06 era sólo lectura, con el `PATCH` existente pero sin pantalla que lo llamara |
-| `/dashboard/ubicaciones` | Árbol expandible + panel de detalle |
+| `/dashboard/entidades/nueva` | Alta compuesta: datos generales + comerciales + contacto principal + dirección fiscal (calle…CP + referencia + coordenada con mapa) |
+| `/dashboard/entidades/[id]` | Detalle con tabs General · Contactos y direcciones · Cuenta bancaria (si aplica) · Auditoría, y acciones de bloqueo/desbloqueo. La pestaña General edita in-place los campos de "modificación libre" (§4). La card "Direcciones" agrega/edita/archiva (antes de 2026-08-06 era sólo lectura, con el `POST`/`PATCH` existente pero sin pantalla que los llamara) |
+| `/dashboard/ubicaciones` | Árbol expandible + panel de detalle; un `centro_operativo` seleccionado muestra su dirección + mapa, editable in-place |
+| `/dashboard/mapa` | Todos los puntos con coordenada (clientes/proveedores/mixtas + centros operativos) en un solo mapa, filtro por tipo, leyenda de colores, tarjeta con el nombre al pasar el cursor sobre un pin, buscador por nombre entre los pines cargados, clic en el pin abre la ficha — nueva en 2026-08-06, base para agrupar por zona cuando llegue Rutas (`contexto/RTB-PRO-RUT-01_Modulo_Rutas.md`) |
 
-Ambas entradas de navegación (`Entidades`, `Ubicaciones`) están en la nueva
-sección "Datos maestros" de `app/lib/rbac/config.ts`, visibles para los 8 roles.
+Las cuatro entradas de navegación (`Entidades`, `Ubicaciones`, `Mapa`,
+`Productos`/`Catálogos`) están en la sección "Datos maestros" de
+`app/lib/rbac/config.ts`, visibles para los 8 roles.
+
+**Componentes de mapa** (`app/components/mapas/`): `MapaPunto` (un pin,
+arrastrable si `editable`), `MapaMultiple` (varios pines, usado por
+`/dashboard/mapa`), `CampoCoordenada` (inputs de lat/long, acepta pegar
+`"20.6736, -103.3440"`, botón "obtener dirección de esta coordenada") y
+`PropuestaDireccion` (muestra el resultado de Mapbox con "usar esta
+dirección" / "descartar" — nunca sobrescribe solo). Envueltos con
+`next/dynamic({ ssr: false })` porque `mapbox-gl` toca `window`. Requieren
+`MAPBOX_TOKEN`/`MAPBOX_PUBLIC_TOKEN` en `app/.env` (ver `.env.example`);
+sin ellos, degradan a un aviso en vez de romper el formulario.
 
 ## 9. Reglas de negocio (vigentes)
 

@@ -338,6 +338,18 @@ credito_autorizado, moneda_default)`. `categoria`/`condicion_pago` sólo por
 **Grants/RLS:** iguales a `contactos`, más `almacen`/`logistica` en
 `INSERT`/`UPDATE`.
 
+**`latitud`/`longitud` en uso desde `024_ubicaciones_geo.sql`** (2026-08-06):
+existían desde `002_entidades_core.sql` pero ninguna pantalla las capturaba
+ni las mostraba. El flujo real: `POST/PATCH /api/entidades/[id]/direcciones`
+(la pestaña "Contactos y direcciones" de la ficha, con
+`components/mapas/{CampoCoordenada,MapaPunto,PropuestaDireccion}`) llama a
+`GET /api/geocodificacion?modo=inverso` (Mapbox Geocoding v6,
+`app/lib/mapas/mapbox.ts`, `permanent=true` porque el resultado se
+persiste) para proponer calle/colonia/ciudad/estado/CP a partir de la
+coordenada — el usuario confirma antes de que se sobrescriba nada, nunca
+en automático. `GET /api/mapa/puntos` alimenta `/dashboard/mapa`, la vista
+de todos los puntos con coordenada (índice parcial `idx_direcciones_geo`).
+
 ---
 
 ## `ubicaciones_internas`
@@ -361,9 +373,23 @@ taxonomía (`ubicacion_tipo_rango()`), pero puede saltarse niveles intermedios.
 | `capacidad_posiciones` | integer | sí | — | `> 0`; la ocupación NO se guarda aquí (cálculo de Almacén, módulo futuro) |
 | `responsable_id` | uuid → `profiles(id)` | sí | — | |
 | `activo` | boolean | no | `true` | `almacen` **no puede** cambiar este campo |
+| `calle`, `numero_exterior`, `numero_interior`, `colonia`, `ciudad`, `entidad_federativa`, `pais`, `codigo_postal`, `referencia` | varchar/text | sí | — | espejo de `direcciones`; `codigo_postal` valida `^[0-9]{5}$` (`ubicaciones_cp_chk`) |
+| `latitud` / `longitud` | numeric(10,7) | sí | — | ambas o ninguna; rango geográfico válido (`ubicaciones_geo_chk`, espejo de `direcciones_geo_chk`) |
+
+**`024_ubicaciones_geo.sql`** (2026-08-06) añadió las 11 columnas de
+dirección/coordenada de arriba, exclusivas del nivel raíz del árbol:
+`ubicaciones_geo_solo_centro_chk` exige que estén todas en `NULL` salvo
+cuando `tipo = 'centro_operativo'` — una zona/pasillo/rack/posición
+hereda la ubicación de su centro, no captura la suya. Normalizadas con
+`nullif(btrim(...), '')` en `ubicaciones_before_insert`/`_before_update`
+para que un `''` de formulario no burle el `CHECK`. UI: panel de detalle
+de `/dashboard/ubicaciones` (`UbicacionGeoPanel`, sólo visible para
+`centro_operativo`) y la sección opcional del modal de alta.
 
 **Grants:** `SELECT`/`INSERT` libres; `UPDATE` de `(nombre, descripcion,
-responsable_id, capacidad_posiciones, clasificacion, uso_especial, activo)` —
+responsable_id, capacidad_posiciones, clasificacion, uso_especial, activo,
+calle, numero_exterior, numero_interior, colonia, ciudad,
+entidad_federativa, pais, codigo_postal, referencia, latitud, longitud)` —
 `parent_id`/`segmento`/`codigo`/`nivel`/`tipo` los protege el trigger, no el
 grant (útil para insert, inmutable después). **RLS:** `SELECT` para los 8;
 `INSERT`/`UPDATE` para `super_admin`/`direccion`/`almacen`.

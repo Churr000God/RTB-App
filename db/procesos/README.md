@@ -12,6 +12,7 @@ Complementa a `db/ESQUEMA.md` (qué es cada tabla) con el "cómo se usa".
 | [`bloqueo-y-aprobaciones.md`](./bloqueo-y-aprobaciones.md) | Bloqueo temporal/permanente y la cola de `solicitudes_cambio` |
 | [`cuenta-bancaria-proveedor.md`](./cuenta-bancaria-proveedor.md) | Alta/reemplazo de cuenta bancaria, validación de CLABE, control antifraude |
 | [`ubicaciones-internas.md`](./ubicaciones-internas.md) | Construcción del árbol de ubicaciones internas |
+| [`direcciones-y-mapa.md`](./direcciones-y-mapa.md) | Dirección + coordenada de una entidad o centro operativo, geocodificación con Mapbox y el mapa de `/dashboard/mapa` |
 | [`alta-producto.md`](./alta-producto.md) | Alta de producto, identificadores dobles, fusión de duplicados, fotos de catálogo y vista de galería |
 | [`movimientos-de-inventario.md`](./movimientos-de-inventario.md) | Kardex: unidad de medida, cross-dock, bloqueo de saldo negativo |
 | [`conteo-fisico.md`](./conteo-fisico.md) | Congelamiento, asignación, captura con vista ciega, conciliación, firmas |
@@ -32,3 +33,9 @@ existía, y permisos de gobierno de unidad/familia estrechados.
 día, entrega aparte): `siglas` + edición de datos generales de entidad
 (`020_entidades_siglas.sql`) y fotos de producto con vista de galería
 (`021`-`023_producto_imagenes*.sql`).
+
+`direcciones-y-mapa.md` es nuevo, también del 2026-08-06 (`024_ubicaciones_geo.sql`
++ `app/lib/mapas/`): coordenada y geocodificación para direcciones de
+entidades y centros operativos, y el mapa de `/dashboard/mapa`.
+`ubicaciones-internas.md` y `alta-cliente.md` se ampliaron para
+referenciarlo desde su propia gestión de dirección/coordenada.
