@@ -175,6 +175,20 @@ export interface UbicacionInterna {
   descripcion: string | null;
   capacidad_posiciones: number | null;
   responsable_id: string | null;
+  // Dirección + coordenada (024_ubicaciones_geo.sql) — sólo pobladas
+  // cuando tipo='centro_operativo' (ubicaciones_geo_solo_centro_chk); una
+  // zona/pasillo/rack/posición hereda la ubicación de su centro.
+  calle: string | null;
+  numero_exterior: string | null;
+  numero_interior: string | null;
+  colonia: string | null;
+  ciudad: string | null;
+  entidad_federativa: string | null;
+  pais: string | null;
+  codigo_postal: string | null;
+  referencia: string | null;
+  latitud: number | null;
+  longitud: number | null;
   activo: boolean;
   created_by: string | null;
   updated_by: string | null;

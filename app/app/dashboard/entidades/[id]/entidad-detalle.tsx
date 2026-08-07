@@ -8,6 +8,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { puede } from '@/lib/entidades/permisos';
 import {
   CONDICION_PAGO_LABELS,
+  DIRECCION_TIPO_LABELS,
   ENTIDAD_TIPO_LABELS,
   PERSONA_TIPO_LABELS,
   UMBRAL_APROBACION_CREDITO,
@@ -17,18 +18,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import MapaPunto from '@/components/mapas/MapaPunto';
+import { CampoCoordenada } from '@/components/mapas/CampoCoordenada';
+import { PropuestaDireccion } from '@/components/mapas/PropuestaDireccion';
+import type { DireccionGeocodificada } from '@/lib/mapas/schemas';
+import { DIRECCION_TIPOS } from '@/types/entidades';
 import type {
   AuditLogEntry,
   Cliente,
   Contacto,
   Direccion,
+  DireccionTipo,
   Entidad,
   Proveedor,
   ProveedorCuentaBancaria,
   ProveedorCuentaResumen,
   SolicitudCambio,
 } from '@/types/entidades';
-import { ArrowLeft, Ban, Loader2, Lock, Pencil, ShieldAlert, Unlock } from 'lucide-react';
+import { ArrowLeft, Ban, Loader2, Lock, MapPin, Pencil, Plus, ShieldAlert, Unlock, X } from 'lucide-react';
 
 interface Props {
   entidad: Entidad;
@@ -290,19 +297,7 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
                 </div>
               ))}
             </Card>
-            <Card titulo="Direcciones">
-              {direcciones.length === 0 && <p className="text-sm text-muted-foreground">Sin direcciones registradas.</p>}
-              {direcciones.map((d) => (
-                <div key={d.id} className="text-sm py-2 border-b border-border/50 last:border-0">
-                  <p className="font-medium text-rtb-navy capitalize">
-                    {d.tipo} {d.es_principal && <span className="text-[10px] text-rtb-teal ml-1">PRINCIPAL</span>}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {d.calle} {d.numero_exterior ?? ''}, {d.colonia ?? ''}, {d.ciudad}, {d.entidad_federativa} — {d.codigo_postal}
-                  </p>
-                </div>
-              ))}
-            </Card>
+            <DireccionesCard entidadId={entidad.id} direcciones={direcciones} />
           </div>
         </TabsContent>
 
@@ -517,6 +512,351 @@ function Dato({ label, valor }: { label: string; valor: string }) {
     <div className="flex justify-between text-sm py-1">
       <span className="text-muted-foreground">{label}</span>
       <span className="text-rtb-navy font-medium text-right">{valor}</span>
+    </div>
+  );
+}
+
+// Antes esta card era sólo lectura (una lista de texto sin un solo botón)
+// aunque GET/POST/PATCH .../direcciones ya existían — nadie los llamaba
+// desde ninguna pantalla. Ahora agrega/edita/archiva, con dirección +
+// coordenada + mapa. router.refresh() recarga `direcciones` desde el
+// Server Component (mismo patrón que guardarCredito arriba).
+function DireccionesCard({ entidadId, direcciones }: { entidadId: string; direcciones: Direccion[] }) {
+  const { role } = useAuth();
+  const router = useRouter();
+  const [modal, setModal] = useState<{ modo: 'crear' } | { modo: 'editar'; direccion: Direccion } | null>(null);
+  const [archivando, setArchivando] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const puedeEscribir = puede(role, 'direcciones', 'insert');
+
+  const archivar = async (direccion: Direccion) => {
+    if (
+      !confirm(
+        `¿Archivar la dirección de tipo "${DIRECCION_TIPO_LABELS[direccion.tipo]}"? No se borra (P05: "no borrado físico"), sólo deja de aparecer aquí.`
+      )
+    ) {
+      return;
+    }
+    setArchivando(direccion.id);
+    setError(null);
+    const res = await fetch(`/api/entidades/${entidadId}/direcciones/${direccion.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activo: false }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setArchivando(null);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo archivar la dirección.');
+      return;
+    }
+    router.refresh();
+  };
+
+  return (
+    <div className="bg-rtb-surface/60 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-rtb-navy-mid uppercase tracking-wider">Direcciones</h3>
+        {puedeEscribir && (
+          <button
+            type="button"
+            onClick={() => setModal({ modo: 'crear' })}
+            className="text-xs text-rtb-teal font-medium flex items-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-destructive mb-2">{error}</p>}
+      {direcciones.length === 0 && <p className="text-sm text-muted-foreground">Sin direcciones registradas.</p>}
+
+      <div className="space-y-2">
+        {direcciones.map((d) => (
+          <div key={d.id} className="text-sm py-2 border-b border-border/50 last:border-0">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-medium text-rtb-navy">
+                  {DIRECCION_TIPO_LABELS[d.tipo]}
+                  {d.es_principal && <span className="text-[10px] text-rtb-teal ml-1">PRINCIPAL</span>}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {d.calle} {d.numero_exterior ?? ''}
+                  {d.numero_interior ? ` int. ${d.numero_interior}` : ''}, {d.colonia ?? ''}, {d.ciudad},{' '}
+                  {d.entidad_federativa} — {d.codigo_postal}
+                </p>
+                {d.referencia && <p className="text-xs text-muted-foreground italic">{d.referencia}</p>}
+                {d.latitud != null && d.longitud != null && (
+                  <p className="text-[11px] text-rtb-teal tabular-nums flex items-center gap-1 mt-0.5">
+                    <MapPin className="w-3 h-3" /> {d.latitud.toFixed(5)}, {d.longitud.toFixed(5)}
+                  </p>
+                )}
+              </div>
+              {puedeEscribir && (
+                <button
+                  type="button"
+                  onClick={() => setModal({ modo: 'editar', direccion: d })}
+                  className="text-rtb-teal shrink-0"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {puedeEscribir && (
+              <button
+                type="button"
+                onClick={() => archivar(d)}
+                disabled={archivando === d.id}
+                className="text-[11px] text-destructive mt-1"
+              >
+                {archivando === d.id ? 'Archivando…' : 'Archivar'}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {modal && (
+        <DireccionModal
+          entidadId={entidadId}
+          direccion={modal.modo === 'editar' ? modal.direccion : null}
+          onClose={() => setModal(null)}
+          onGuardada={() => {
+            setModal(null);
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function DireccionModal({
+  entidadId,
+  direccion,
+  onClose,
+  onGuardada,
+}: {
+  entidadId: string;
+  direccion: Direccion | null;
+  onClose: () => void;
+  onGuardada: () => void;
+}) {
+  const editando = Boolean(direccion);
+  const [form, setForm] = useState({
+    tipo: (direccion?.tipo ?? 'fiscal') as DireccionTipo,
+    calle: direccion?.calle ?? '',
+    numero_exterior: direccion?.numero_exterior ?? '',
+    numero_interior: direccion?.numero_interior ?? '',
+    colonia: direccion?.colonia ?? '',
+    ciudad: direccion?.ciudad ?? '',
+    entidad_federativa: direccion?.entidad_federativa ?? 'Jalisco',
+    pais: direccion?.pais ?? 'México',
+    codigo_postal: direccion?.codigo_postal ?? '',
+    referencia: direccion?.referencia ?? '',
+    latitud: direccion?.latitud != null ? String(direccion.latitud) : '',
+    longitud: direccion?.longitud != null ? String(direccion.longitud) : '',
+    es_principal: direccion?.es_principal ?? false,
+  });
+  const [propuesta, setPropuesta] = useState<DireccionGeocodificada | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const usarDireccionPropuesta = (d: DireccionGeocodificada) => {
+    setForm((f) => ({
+      ...f,
+      calle: d.calle ?? f.calle,
+      colonia: d.colonia ?? f.colonia,
+      ciudad: d.ciudad ?? f.ciudad,
+      entidad_federativa: d.entidad_federativa ?? f.entidad_federativa,
+      codigo_postal: d.codigo_postal ?? f.codigo_postal,
+    }));
+    setPropuesta(null);
+  };
+
+  const guardar = async () => {
+    if (!form.calle || !form.ciudad || !form.entidad_federativa || !form.codigo_postal) {
+      setError('Calle, ciudad, estado y código postal son obligatorios.');
+      return;
+    }
+    setError(null);
+    setEnviando(true);
+    const payload = {
+      tipo: form.tipo,
+      calle: form.calle,
+      numero_exterior: form.numero_exterior || undefined,
+      numero_interior: form.numero_interior || undefined,
+      colonia: form.colonia || undefined,
+      ciudad: form.ciudad,
+      entidad_federativa: form.entidad_federativa,
+      pais: form.pais || undefined,
+      codigo_postal: form.codigo_postal,
+      referencia: form.referencia || undefined,
+      latitud: form.latitud ? Number(form.latitud) : undefined,
+      longitud: form.longitud ? Number(form.longitud) : undefined,
+      es_principal: form.es_principal,
+    };
+    const url = editando
+      ? `/api/entidades/${entidadId}/direcciones/${direccion!.id}`
+      : `/api/entidades/${entidadId}/direcciones`;
+    const res = await fetch(url, {
+      method: editando ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setEnviando(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo guardar la dirección.');
+      return;
+    }
+    onGuardada();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-xl w-full max-w-2xl p-6 my-8" style={{ boxShadow: 'var(--shadow-lg)' }}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-display font-semibold text-rtb-navy">
+            {editando ? 'Editar dirección' : 'Agregar dirección'}
+          </h2>
+          <button type="button" onClick={onClose} className="text-muted-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 p-2.5 bg-red-50 text-red-700 rounded-lg text-xs mb-3">
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <CampoModal label="Tipo" span2>
+            <select
+              value={form.tipo}
+              onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value as DireccionTipo }))}
+              className="w-full text-sm border border-border rounded-lg px-3 py-2"
+            >
+              {DIRECCION_TIPOS.map((t) => (
+                <option key={t} value={t}>
+                  {DIRECCION_TIPO_LABELS[t]}
+                </option>
+              ))}
+            </select>
+          </CampoModal>
+          <CampoModal label="Calle" span2 requerido>
+            <Input value={form.calle} onChange={(e) => setForm((f) => ({ ...f, calle: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Número exterior">
+            <Input
+              value={form.numero_exterior}
+              onChange={(e) => setForm((f) => ({ ...f, numero_exterior: e.target.value }))}
+            />
+          </CampoModal>
+          <CampoModal label="Número interior">
+            <Input
+              value={form.numero_interior}
+              onChange={(e) => setForm((f) => ({ ...f, numero_interior: e.target.value }))}
+            />
+          </CampoModal>
+          <CampoModal label="Colonia">
+            <Input value={form.colonia} onChange={(e) => setForm((f) => ({ ...f, colonia: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Código postal" requerido>
+            <Input
+              value={form.codigo_postal}
+              onChange={(e) => setForm((f) => ({ ...f, codigo_postal: e.target.value }))}
+              className="tabular-nums"
+            />
+          </CampoModal>
+          <CampoModal label="Ciudad" requerido>
+            <Input value={form.ciudad} onChange={(e) => setForm((f) => ({ ...f, ciudad: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Estado" requerido>
+            <Input
+              value={form.entidad_federativa}
+              onChange={(e) => setForm((f) => ({ ...f, entidad_federativa: e.target.value }))}
+            />
+          </CampoModal>
+          <CampoModal label="País" span2>
+            <Input value={form.pais} onChange={(e) => setForm((f) => ({ ...f, pais: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Referencia" span2>
+            <Input
+              value={form.referencia}
+              onChange={(e) => setForm((f) => ({ ...f, referencia: e.target.value }))}
+              placeholder="Portón azul, frente a la gasolinera"
+            />
+          </CampoModal>
+
+          <div className="sm:col-span-2 flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="es_principal"
+              checked={form.es_principal}
+              onChange={(e) => setForm((f) => ({ ...f, es_principal: e.target.checked }))}
+              className="w-4 h-4"
+            />
+            <label htmlFor="es_principal" className="text-sm text-rtb-navy">
+              Dirección principal de este tipo
+            </label>
+          </div>
+
+          <div className="sm:col-span-2 pt-2 border-t border-border/60 space-y-3">
+            <p className="text-xs font-semibold text-rtb-navy-mid">Ubicación en el mapa</p>
+            <CampoCoordenada
+              latitud={form.latitud}
+              longitud={form.longitud}
+              onLatitudChange={(v) => setForm((f) => ({ ...f, latitud: v }))}
+              onLongitudChange={(v) => setForm((f) => ({ ...f, longitud: v }))}
+              onGeocodificado={setPropuesta}
+            />
+            <PropuestaDireccion direccion={propuesta} onUsar={usarDireccionPropuesta} onDescartar={() => setPropuesta(null)} />
+            <MapaPunto
+              latitud={form.latitud ? Number(form.latitud) : null}
+              longitud={form.longitud ? Number(form.longitud) : null}
+              editable
+              onCoordenadaChange={(lat, lng) =>
+                setForm((f) => ({ ...f, latitud: lat.toFixed(7), longitud: lng.toFixed(7) }))
+              }
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 mt-5">
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button onClick={guardar} disabled={enviando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            {enviando && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+            Guardar
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CampoModal({
+  label,
+  children,
+  span2,
+  requerido,
+}: {
+  label: string;
+  children: React.ReactNode;
+  span2?: boolean;
+  requerido?: boolean;
+}) {
+  return (
+    <div className={span2 ? 'sm:col-span-2' : ''}>
+      <Label className="text-xs font-semibold text-rtb-navy-mid">
+        {label}
+        {requerido && <span className="text-destructive ml-0.5">*</span>}
+      </Label>
+      <div className="mt-1">{children}</div>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   BarChart3,
   ShoppingBag,
   Building2,
+  Map,
   MapPinned,
   Boxes,
   ClipboardCheck,
@@ -72,6 +73,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Ubicaciones',
         href: '/dashboard/ubicaciones',
         icon: MapPinned,
+        roles: 'all',
+      },
+      {
+        label: 'Mapa',
+        href: '/dashboard/mapa',
+        icon: Map,
         roles: 'all',
       },
       {

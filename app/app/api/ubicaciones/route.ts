@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { ubicacionCreateSchema } from '@/lib/entidades/schemas';
+import { mensajeErrorUbicacion } from '@/lib/entidades/errores';
 
 // GET - listado plano (los 8 roles consultan); la UI arma el árbol con
 // parent_id en el cliente.
@@ -46,11 +47,7 @@ export async function POST(request: Request) {
     const { data, error } = await supabase.from('ubicaciones_internas').insert(parsed.data).select('*').single();
 
     if (error) {
-      const duplicado = /uq_ubicaciones_segmento/i.test(error.message);
-      return NextResponse.json(
-        { error: duplicado ? 'Ya existe una ubicación con ese segmento bajo el mismo padre.' : error.message },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: mensajeErrorUbicacion(error.message) }, { status: 400 });
     }
 
     return NextResponse.json({ success: true, data }, { status: 201 });

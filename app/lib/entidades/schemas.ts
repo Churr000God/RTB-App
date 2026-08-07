@@ -136,17 +136,69 @@ export const entidadCreateSchema = entidadDatosSchema
 
 // ---------- Ubicaciones internas ----------
 
-export const ubicacionCreateSchema = z.object({
-  parent_id: z.string().uuid().optional().nullable(),
-  segmento: z.string().trim().min(1, 'El segmento es obligatorio').max(30),
-  tipo: z.enum(UBICACION_TIPOS, { errorMap: () => ({ message: 'Tipo de ubicación inválido' }) }),
-  clasificacion: z.enum(UBICACION_CLASIFICACIONES).default('fisica'),
-  uso_especial: z.enum(UBICACION_USOS_ESPECIALES).optional().nullable(),
-  nombre: z.string().trim().min(2, 'El nombre es obligatorio').max(120),
-  descripcion: z.string().trim().max(2000).optional().nullable(),
-  capacidad_posiciones: z.coerce.number().int().positive().optional().nullable(),
-  responsable_id: z.string().uuid().optional().nullable(),
+/** Dirección + coordenada de un centro operativo (024_ubicaciones_geo.sql):
+ *  mismos campos que `direccionSchema`, pero todos opcionales — a
+ *  diferencia de la dirección de una entidad, un centro operativo puede
+ *  crearse sin dirección y capturarla después. Reutilizada por
+ *  create/update junto con el `superRefine` de abajo, que espeja los dos
+ *  CHECK nuevos: `ubicaciones_geo_chk` (ambas coordenadas o ninguna) y
+ *  `ubicaciones_geo_solo_centro_chk` (sólo `tipo='centro_operativo'`). El
+ *  CHECK sigue siendo la barrera real; esto sólo da el mensaje en español
+ *  antes del round-trip. */
+const ubicacionGeoSchema = z.object({
+  calle: z.string().trim().max(200).optional().nullable(),
+  numero_exterior: z.string().trim().max(20).optional().nullable(),
+  numero_interior: z.string().trim().max(20).optional().nullable(),
+  colonia: z.string().trim().max(120).optional().nullable(),
+  ciudad: z.string().trim().max(120).optional().nullable(),
+  entidad_federativa: z.string().trim().max(120).optional().nullable(),
+  pais: z.string().trim().max(120).optional().nullable(),
+  codigo_postal: z
+    .string()
+    .trim()
+    .refine((v) => v === '' || cpValido(v), 'Código postal inválido (5 dígitos)')
+    .optional()
+    .nullable(),
+  referencia: z.string().trim().max(1000).optional().nullable(),
+  latitud: z.coerce.number().min(-90).max(90).optional().nullable(),
+  longitud: z.coerce.number().min(-180).max(180).optional().nullable(),
 });
+
+function tieneDatosGeo(v: z.infer<typeof ubicacionGeoSchema>): boolean {
+  return Object.entries(v).some(([campo, valor]) => campo !== 'pais' && valor != null && valor !== '');
+}
+
+function validarGeoUbicacion(v: { tipo?: string } & z.infer<typeof ubicacionGeoSchema>, ctx: z.RefinementCtx) {
+  if ((v.latitud == null) !== (v.longitud == null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Captura ambas coordenadas (latitud y longitud) o ninguna',
+      path: ['latitud'],
+    });
+  }
+  if (v.tipo && v.tipo !== 'centro_operativo' && tieneDatosGeo(v)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Sólo un centro operativo puede tener dirección y coordenada',
+      path: ['tipo'],
+    });
+  }
+}
+
+export const ubicacionCreateSchema = z
+  .object({
+    parent_id: z.string().uuid().optional().nullable(),
+    segmento: z.string().trim().min(1, 'El segmento es obligatorio').max(30),
+    tipo: z.enum(UBICACION_TIPOS, { errorMap: () => ({ message: 'Tipo de ubicación inválido' }) }),
+    clasificacion: z.enum(UBICACION_CLASIFICACIONES).default('fisica'),
+    uso_especial: z.enum(UBICACION_USOS_ESPECIALES).optional().nullable(),
+    nombre: z.string().trim().min(2, 'El nombre es obligatorio').max(120),
+    descripcion: z.string().trim().max(2000).optional().nullable(),
+    capacidad_posiciones: z.coerce.number().int().positive().optional().nullable(),
+    responsable_id: z.string().uuid().optional().nullable(),
+  })
+  .merge(ubicacionGeoSchema)
+  .superRefine(validarGeoUbicacion);
 
 export const ubicacionUpdateSchema = z
   .object({
@@ -157,7 +209,14 @@ export const ubicacionUpdateSchema = z
     clasificacion: z.enum(UBICACION_CLASIFICACIONES).optional(),
     uso_especial: z.enum(UBICACION_USOS_ESPECIALES).optional().nullable(),
     activo: z.boolean().optional(),
+    // 'tipo' no es editable (el trigger lo congela); viaja aquí sólo para
+    // que el formulario de edición pueda correr el mismo superRefine que
+    // el alta sin duplicar la regla — la ruta de API lo descarta del
+    // payload antes de llamar a Supabase (ver api/ubicaciones/[id]).
+    tipo: z.enum(UBICACION_TIPOS).optional(),
   })
+  .merge(ubicacionGeoSchema)
+  .superRefine(validarGeoUbicacion)
   .refine((v) => Object.keys(v).length > 0, { message: 'Nada que actualizar' });
 
 // ---------- Cuentas bancarias de proveedor ----------

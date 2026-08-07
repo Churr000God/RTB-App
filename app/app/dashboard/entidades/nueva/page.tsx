@@ -24,6 +24,10 @@ import {
 } from '@/lib/entidades/config';
 import { CANAL_ORIGENES, CONDICION_PAGOS, ENTIDAD_TIPOS, PERSONA_TIPOS } from '@/types/entidades';
 import type { CanalOrigen, CondicionPago, EntidadTipo, PersonaTipo } from '@/types/entidades';
+import MapaPunto from '@/components/mapas/MapaPunto';
+import { CampoCoordenada } from '@/components/mapas/CampoCoordenada';
+import { PropuestaDireccion } from '@/components/mapas/PropuestaDireccion';
+import type { DireccionGeocodificada } from '@/lib/mapas/schemas';
 
 const initialForm = {
   tipo: 'cliente' as EntidadTipo,
@@ -62,6 +66,9 @@ const initialForm = {
   // en Jalisco, así que ahora es un valor real de partida, editable.
   entidad_federativa: 'Jalisco',
   codigo_postal: '',
+  referencia: '',
+  latitud: '',
+  longitud: '',
 };
 
 export default function NuevaEntidadPage() {
@@ -70,10 +77,31 @@ export default function NuevaEntidadPage() {
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [propuestaDireccion, setPropuestaDireccion] = useState<DireccionGeocodificada | null>(null);
 
   const set = (campo: keyof typeof initialForm) => (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) => setForm((f) => ({ ...f, [campo]: e.target.value }));
+
+  // Clic o arrastre del pin en el mapa -> actualiza los campos de texto.
+  const handleCoordenadaMapa = (lat: number, lng: number) => {
+    setForm((f) => ({ ...f, latitud: lat.toFixed(7), longitud: lng.toFixed(7) }));
+  };
+
+  // "Usar esta dirección": única vía de sobrescritura — decisión confirmada
+  // "proponer y que el usuario confirme", nunca en automático.
+  const usarDireccionPropuesta = (direccion: DireccionGeocodificada) => {
+    setForm((f) => ({
+      ...f,
+      calle: direccion.calle ?? f.calle,
+      numero_exterior: direccion.numero_exterior ?? f.numero_exterior,
+      colonia: direccion.colonia ?? f.colonia,
+      ciudad: direccion.ciudad ?? f.ciudad,
+      entidad_federativa: direccion.entidad_federativa ?? f.entidad_federativa,
+      codigo_postal: direccion.codigo_postal ?? f.codigo_postal,
+    }));
+    setPropuestaDireccion(null);
+  };
 
   const esCliente = form.tipo === 'cliente' || form.tipo === 'mixta';
   const esProveedor = form.tipo === 'proveedor' || form.tipo === 'mixta';
@@ -158,6 +186,9 @@ export default function NuevaEntidadPage() {
           ciudad: form.ciudad,
           entidad_federativa: form.entidad_federativa,
           codigo_postal: form.codigo_postal,
+          referencia: form.referencia || undefined,
+          latitud: form.latitud ? Number(form.latitud) : undefined,
+          longitud: form.longitud ? Number(form.longitud) : undefined,
         };
       }
 
@@ -352,6 +383,35 @@ export default function NuevaEntidadPage() {
             <Campo label="Estado" span2>
               <Input value={form.entidad_federativa} onChange={set('entidad_federativa')} placeholder="Jalisco" />
             </Campo>
+            <Campo label="Referencia" span2>
+              <Input
+                value={form.referencia}
+                onChange={set('referencia')}
+                placeholder="Portón azul, frente a la gasolinera"
+              />
+            </Campo>
+
+            <div className="sm:col-span-2 pt-2 border-t border-border/60 space-y-3">
+              <p className="text-xs font-semibold text-rtb-navy-mid">Ubicación en el mapa</p>
+              <CampoCoordenada
+                latitud={form.latitud}
+                longitud={form.longitud}
+                onLatitudChange={(v) => setForm((f) => ({ ...f, latitud: v }))}
+                onLongitudChange={(v) => setForm((f) => ({ ...f, longitud: v }))}
+                onGeocodificado={setPropuestaDireccion}
+              />
+              <PropuestaDireccion
+                direccion={propuestaDireccion}
+                onUsar={usarDireccionPropuesta}
+                onDescartar={() => setPropuestaDireccion(null)}
+              />
+              <MapaPunto
+                latitud={form.latitud ? Number(form.latitud) : null}
+                longitud={form.longitud ? Number(form.longitud) : null}
+                editable
+                onCoordenadaChange={handleCoordenadaMapa}
+              />
+            </div>
           </Seccion>
         </div>
 
