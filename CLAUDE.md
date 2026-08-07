@@ -536,9 +536,41 @@ corrigió).
   contra el `PuntoMapa[]` que el mapa ya recibía. De paso, gotcha nuevo
   descubierto al activar los tokens: `env_file` de `docker-compose.yml`
   no se relee en caliente (ver Gotchas).
+- **2026-08-06 (cierre de jornada)** — Campaña de QA integral por navegador
+  (extensión Claude in Chrome) con los 8 usuarios QA, más medición de
+  rendimiento y consumo de recursos. Primera vez que se prueban juntos los
+  4 bloques de trabajo del día. Informe completo en
+  `contexto/QA_INTEGRAL_2026-08-06.md`. **Hallazgo crítico sin corregir:**
+  "Aplicar al inventario" (Conteos Físicos) pasa el conteo a estado
+  "Aplicado" sin error visible, pero `inventario_aplicar_conteo()`
+  (`016_qa_correcciones.sql:259-299`) sólo actualiza la columna lateral
+  `cantidad_fisica` — nunca `cantidad_teorica` (el número que usa el resto
+  del sistema) ni genera movimientos de kardex. La corrección del mismo día
+  (016) arregló que E-01/E-02/E-03 fallaran con errores crudos, pero dejó
+  sin resolver el problema de fondo que E-03 describía originalmente: un
+  conteo "Aplicado" sigue sin aplicar nada al inventario real. No se
+  corrigió en esta sesión — cambio de lógica de negocio central, primer
+  punto pendiente para retomar. Contraste verificado: la misma
+  reconciliación por la vía de un Ajuste autorizado (que sí usa
+  `inventario_movimientos`) funciona y su guardrail de saldo negativo
+  rechaza correctamente datos inconsistentes — el kardex real sí protege,
+  es la vía de Conteos la que nunca pasa por él. Segundo hallazgo (confianza
+  media, sin confirmar con una segunda repro limpia): una transición de
+  estado de conteo devolvió `200 {"success":true}` sin persistir el cambio.
+  Confirmado sí funcionando, clic a clic + SQL: el circuito completo de
+  imágenes de producto (021/022/023, subir/promover/quitar sin choque de
+  índice único — bloque que nunca se había probado así), edición real de
+  datos generales de entidad, CLABE enmascarada para `direccion`, y
+  permisos negativos por API en los 5 roles restantes.
 
 ## TODO
 
+- **RTB-INV-01 — "Aplicar al inventario" no corrige `cantidad_teorica`.**
+  Máxima prioridad, hallazgo B-00 de `contexto/QA_INTEGRAL_2026-08-06.md`.
+  `inventario_aplicar_conteo()` necesita generar movimientos de kardex reales
+  (o el dueño del proyecto decide explícitamente que el diseño actual —
+  `cantidad_fisica` sin kardex — es el deseado, pero hoy el botón y el
+  estado "Aplicado" comunican lo contrario).
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está
