@@ -91,9 +91,14 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
     // Sin UPDATE: una corrección de costo es una fila nueva que cierra la vigencia anterior.
   },
   precios_referencia: {
+    // 028_ventas_precios.sql (RTB-VEN-01) sacó a 'ventas' del insert/update:
+    // dos de los tres precios que el vendedor ELIGE al cotizar ("Costo
+    // Refacción"/"Costo Ariba") vivían en una tabla que el propio vendedor
+    // podía editar. Mismo criterio que 015 con unidades/familias — quien
+    // decide el precio no debe ser quien lo cotiza.
     select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas', 'compras'],
-    update: ['super_admin', 'direccion', 'ventas', 'compras'],
+    insert: ['super_admin', 'direccion', 'compras'],
+    update: ['super_admin', 'direccion', 'compras'],
   },
   existencias: {
     select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],

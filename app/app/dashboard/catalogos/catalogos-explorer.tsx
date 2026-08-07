@@ -71,6 +71,7 @@ export function CatalogosExplorer({ initialData }: { initialData: Datos }) {
                 filas={datos[t] ?? []}
                 unidades={unidades}
                 puedeEditar={puede(role, meta.recurso, 'update')}
+                puedeEditarMargen={role === 'super_admin' || role === 'direccion'}
                 onEditar={(fila) => setModal({ tipo: t, fila })}
                 onToggleActivo={async (fila) => {
                   await fetch(`/api/catalogos/${t}/${fila.id}`, {
@@ -80,6 +81,7 @@ export function CatalogosExplorer({ initialData }: { initialData: Datos }) {
                   });
                   void cargar(t);
                 }}
+                onCambio={() => void cargar(t)}
               />
             </TabsContent>
           );

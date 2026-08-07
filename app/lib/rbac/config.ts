@@ -143,8 +143,10 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Ventas',
         href: '/dashboard/ventas',
         icon: ShoppingCart,
-        roles: ['super_admin', 'direccion', 'ventas'],
-        badge: 'Próximamente',
+        // 'compras' responde consultas de Compras-ligero, 'almacen' libera
+        // pedidos/despacha NR — ambos necesitan llegar al módulo, aunque
+        // su superficie de acción real la limita RLS/lib/ventas/permisos.ts.
+        roles: ['super_admin', 'direccion', 'ventas', 'compras', 'almacen'],
       },
       {
         label: 'Compras',

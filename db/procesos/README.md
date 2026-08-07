@@ -19,6 +19,7 @@ Complementa a `db/ESQUEMA.md` (qué es cada tabla) con el "cómo se usa".
 | [`discrepancias-y-ajustes.md`](./discrepancias-y-ajustes.md) | Investigación de discrepancias y ajuste autorizado del teórico |
 | [`redefinicion-unidad-medida.md`](./redefinicion-unidad-medida.md) | Única vía para cambiar la unidad de medida de un producto |
 | [`administracion-catalogos.md`](./administracion-catalogos.md) | Familias, categorías, marcas y unidades de medida: pantalla, permisos, diferencia familia/categoría |
+| [`ciclo-de-venta.md`](./ciclo-de-venta.md) | RTB-VEN-01: precio de venta, Compras-ligero, cotización→pedido→reserva/compromiso, NR y despacho al kardex, PO del cliente y vínculos por partida |
 
 Los primeros seis describen el estado real implementado el 2026-08-05
 (submódulo RTB-ENT-01); los siguientes cinco, el submódulo RTB-INV-01
@@ -39,3 +40,9 @@ día, entrega aparte): `siglas` + edición de datos generales de entidad
 entidades y centros operativos, y el mapa de `/dashboard/mapa`.
 `ubicaciones-internas.md` y `alta-cliente.md` se ampliaron para
 referenciarlo desde su propia gestión de dirección/coordenada.
+
+`ciclo-de-venta.md` es nuevo, del 2026-08-07 (`028`…`034_ventas_*.sql`,
+primer submódulo de RTB-VEN-01): cotización con snapshot de precio,
+Compras-ligero formalizado, reserva/compromiso de inventario, Nota de
+Remisión y despacho al kardex, y la validación de PO por partida contra
+la NR.

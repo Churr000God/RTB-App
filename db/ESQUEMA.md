@@ -75,6 +75,20 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `discrepancia_salida` | `ubi`, `cap`, `aju`, `aju_sin_soporte`, `justificado`, `hal`, `men` | `inventario_discrepancias` |
 | `discrepancia_estado` | `abierta`, `en_investigacion`, `con_causa`, `resuelta`, `hallazgo`, `cancelada` | `inventario_discrepancias` |
 | `hallazgo_estado` | `abierto`, `en_seguimiento`, `cerrado_con_causa`, `cerrado_sin_causa` | `inventario_hallazgos` |
+| `ventas_cotizacion_estado` | `borrador`, `enviada`, `aprobada`, `rechazada`, `expirada`, `cancelada` | `ventas_cotizaciones` |
+| `precio_origen_venta` | `refaccion`, `ariba`, `costo_venta` | `ventas_cotizacion_lineas` |
+| `consulta_estado` | `abierta`, `en_proceso`, `respondida`, `sin_disponibilidad`, `cancelada` | `ventas_consultas_compras` |
+| `consulta_urgencia` | `normal`, `alta`, `critica` | `ventas_consultas_compras` |
+| `pedido_estado` | `aprobado`, `liberado`, `en_preparacion`, `entregado_parcial`, `entregado`, `cerrado`, `cancelado` | `ventas_pedidos` |
+| `apartado_nivel` | `reserva`, `compromiso` | `inventario_apartados` |
+| `nr_estado` | `abierta`, `en_preparacion`, `parcialmente_entregada`, `entregada_sin_po`, `parcialmente_respaldada`, `po_vinculada`, `facturada`, `pagada_cerrada`, `cancelada`, `con_incidencia` | `ventas_notas_remision` |
+| `po_estado` | `recibida`, `en_validacion`, `parcialmente_vinculada`, `vinculada`, `pendiente_de_confirmacion`, `rechazada`, `corregida`, `cancelada` | `ventas_ordenes_compra_cliente` |
+| `vinculo_estado` | `pendiente`, `validado`, `rechazado_por_precio`, `rechazado_por_cantidad`, `rechazado_por_duplicidad`, `aprobado_para_facturacion`, `facturado`, `cancelado` | `ventas_po_nr_vinculos` |
+| `ventas_autorizacion_tipo` | `excepcion_subtotal`, `codigo_divergente`, `duplicidad_confirmada`, `correccion_documento` | `ventas_autorizaciones` |
+| `ventas_autorizacion_estado` | `pendiente`, `autorizada`, `rechazada` | `ventas_autorizaciones` |
+| `cliente_tipo` | `credito`, `contado`, `pago_anticipado`, `facturacion_inmediata` | `clientes.tipo_cliente` |
+| `cliente_congelamiento_estado` | `activo`, `liberado` | `cliente_congelamientos` |
+| `cliente_excepcion_estado` | `pendiente`, `autorizada`, `rechazada`, `cancelada` | `cliente_excepciones` |
 
 `profiles.role` **no** es un enum de Postgres — es `TEXT` con un `CHECK`
 (`001_auth_profiles.sql`), a propósito, para poder agregar un rol nuevo sin
@@ -98,7 +112,7 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `clabe_valida(clabe)` | `boolean` | Algoritmo de dígito verificador de CLABE (P03 §V) |
 | `pcb_before_update()` | trigger | `updated_at`/`updated_by` + protege `clabe`/`proveedor_id` |
 | `proveedor_cuentas_resumen(proveedor_id?)` | tabla enmascarada | CLABE `****1234` para `direccion` |
-| `tiene_operaciones_abiertas(entidad_id)` | `boolean` | Punto de extensión para Ventas/Compras — hoy siempre `false` |
+| `tiene_operaciones_abiertas(entidad_id)` | `boolean` | Implementada en `034_ventas_tablero.sql` — antes stub (`select false`). Cuenta cotizaciones/pedidos/NR/PO abiertos; `po_vinculada`/`facturada` NO cuentan (Ventas ya hizo su handoff). Preserva `where entidad_id is not null` (NULL → cero filas, no `false`) por el contrato del invocador existente (`POST /api/entidades/[id]/bloquear`) |
 | `movimiento_signo(tipo)` | `smallint` (`+1`/`-1`) | Signo de un tipo de movimiento de kardex |
 | `costo_unitario_vigente(producto_id, fecha?)` | `numeric` | Cascada promedio→catálogo→proveedor preferente |
 | `productos_before_insert()` / `productos_guard_unidad()` | trigger | Folio `RTB-<familia>-000123`; la unidad de medida sólo cambia vía redefinición autorizada |
@@ -116,6 +130,24 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `inventario_exactitud(conteo_id)` | tabla (`cobertura`/`registro`/`pieza`/`valor`) | Exactitud sobre 4 bases; cobertura es la que impide un 100% ficticio |
 | `inventario_alerta_stock(producto_id?)` | tabla | Alerta ⚪/🔴/🟢, bloqueo de compra y acción sugerida (RTB-PRO-COM-01 §III) |
 | `inventario_verificar_consistencia()` | tabla | Consola de auditoría — sólo `super_admin`/`direccion`; `ajuste_sin_autorizacion` debería ser siempre 0 filas |
+| `costo_promedio_global(producto_id, fecha?)` (`028`) | `numeric` | Costo base de Ventas: promedio ponderado por cantidad de **todas** las ubicaciones (a diferencia de `costo_unitario_vigente()`, que sólo toma la de mayor existencia). No se toca esa función — el kardex sigue dependiendo de su comportamiento actual |
+| `costo_venta_vigente(producto_id, fecha?)` / `costo_venta_detalle(producto_id)` (`028`) | `numeric` / `jsonb` | `coalesce(override manual activo, costo_promedio_global × (1+margen de la familia))`. `NULL` si la familia no tiene margen y no hay override — "producto sin precio calculable", sin margen global de respaldo a propósito |
+| `producto_precio_venta_fijar(producto_id, precio, motivo)` / `_revertir(producto_id, motivo)` (`028`) | `uuid` / `void` | Únicas escritoras de `producto_precio_venta`; sólo `super_admin`/`direccion`. Fijar desactiva cualquier override anterior e inserta uno nuevo — nunca edita en sitio |
+| `cliente_puede_operar(entidad_id)` (`029`) | `jsonb` (`{puede, estado, motivo, congelamiento_id, monto_maximo}`) | El veredicto único de cartera: cruza `entidades.estado` (bloqueo administrativo, sin tocar) + `cliente_congelamientos` + `cliente_excepciones`. Estados: `normal`\|`descongelada`\|`excepcion_autorizada`\|`en_revision`\|`congelada`\|`bloqueada` |
+| `cliente_congelamiento_before_update()` (`029`) | trigger | Congela `entidad_id`/`motivo`/`saldo_origen`/`autorizado_por`; estampa `liberado_at`/`liberado_por` al cambiar `estado` |
+| `ventas_cotizacion_before_insert()` / `_before_update()` (`030`) | trigger | Folio `COT-000000`; valida `clientes` + `cliente_puede_operar()` en el INSERT; congela cabecera (con `RAISE`, nunca reset silencioso) mientras no está en `borrador` |
+| `ventas_cotizacion_linea_before_write()` (`030`) | trigger | El núcleo del snapshot: resuelve `precio_unitario`/`costo_base_snapshot`/`margen_snapshot` según `precio_origen`, calcula `en_consulta`, y lanza `22023` si el precio elegido no tiene costo. Sólo recalcula si cambió `producto_id`/`precio_origen` — cantidad/descuento nunca reabren el precio ya fotografiado |
+| `ventas_cotizacion_enviar/_rechazar/_cancelar/_aprobar()` (`030`, `031`) | `jsonb` | Transiciones de cotización. `_aprobar()` es la más delicada: evidencia + pedido + N líneas + N apartados de reserva, una sola transacción |
+| `ventas_consulta_responder()` / `_cancelar()` (`030`) | `jsonb` | Compras-ligero formalizado — responde con producto+costo y propaga a las líneas en consulta (que quedan pendientes de que Ventas elija precio) |
+| `ventas_pedido_liberar_almacen()` (`031`) | `jsonb` | Reserva → compromiso: un solo `UPDATE` de `nivel` que no toca `cantidad_apartada` |
+| `apartados_before_update()` (`011`, reemplazada en `031`) | trigger | Añade el congelamiento de `pedido_id` y prohíbe `compromiso→reserva` sobre la función que ya usa Almacén |
+| `ventas_nr_emitir()` / `ventas_nr_despachar()` (`032`) | `jsonb` | Emite la NR (Vía A) y despacha al kardex (`salida_venta` + consumo/partición de apartado) — única vía por la que `ventas` llega a escribir en `inventario_movimientos` sin ampliar su RLS |
+| `ventas_nr_seguimiento_after_insert()` (`032`) | trigger | Cachea el último seguimiento en `ventas_notas_remision.ultimo_contacto_at`/`nota_ultimo_contacto` |
+| `ventas_autorizacion_resolver()` (`033`) | `jsonb` | Resuelve una excepción/corrección de Ventas — el aprobador nunca puede ser el solicitante |
+| `vinculo_valida_cobertura_nr()` / `_partida()` (`033`) | constraint trigger diferido | Impide que la cobertura de PO exceda lo entregado de la NR o lo declarado de la partida — evita el doble conteo sin contador denormalizado |
+| `ventas_po_validar()` (`033`) | `jsonb` | El cruce de precios: moneda → RFC → costo unitario (bloqueo total sin excepción) → subtotal coincidente (requiere autorización) → código divergente → duplicidad. Recalcula estados de PO/NR por agregación |
+| `ventas_nr_cobertura()` / `ventas_tablero_nr()` / `ventas_kpis()` (`034`) | `jsonb` / tabla / `jsonb` | Lecturas agregadas del tablero de seguimiento — antigüedad y monto pendiente siempre calculados, nunca almacenados |
+| `ventas_cotizaciones_expirar()` (`034`) | `integer` | Barrido oportunista (sin cron en el proyecto) invocado al cargar el listado |
 
 Todas llevan `SET search_path = public, pg_temp` (evita inyección de esquema) y
 las que son sólo para disparar por trigger (`entidades_before_insert`,
@@ -169,6 +201,31 @@ erDiagram
     productos ||--o{ producto_unidad_redefiniciones : ""
     inventario_conteos ||--o{ producto_unidad_redefiniciones : ""
     inventario_ajustes ||--o{ producto_unidad_redefiniciones : ""
+    producto_familias ||--o{ productos : "margen_porcentaje (028)"
+    productos ||--o{ producto_precio_venta : ""
+    entidades ||--o{ cliente_congelamientos : ""
+    entidades ||--o{ cliente_excepciones : ""
+    cliente_congelamientos ||--o{ cliente_excepciones : "congelamiento_id"
+    entidades ||--o{ ventas_cotizaciones : ""
+    profiles ||--o{ ventas_cotizaciones : "vendedor_id"
+    ventas_cotizaciones ||--o{ ventas_cotizacion_lineas : ""
+    productos ||--o{ ventas_cotizacion_lineas : ""
+    ventas_consultas_compras ||--o{ ventas_cotizacion_lineas : "consulta_id"
+    ventas_cotizaciones ||--o{ ventas_consultas_compras : ""
+    ventas_cotizaciones ||--o{ ventas_aprobaciones : ""
+    ventas_cotizaciones ||--o| ventas_pedidos : ""
+    ventas_pedidos ||--o{ ventas_pedido_lineas : ""
+    ventas_cotizacion_lineas ||--o{ ventas_pedido_lineas : "cotizacion_linea_id"
+    ventas_pedidos ||--o{ inventario_apartados : "pedido_id (031)"
+    ventas_pedidos ||--o| ventas_notas_remision : ""
+    ventas_notas_remision ||--o{ ventas_nr_lineas : ""
+    ventas_pedido_lineas ||--o{ ventas_nr_lineas : "pedido_linea_id"
+    ventas_notas_remision ||--o{ ventas_nr_seguimientos : ""
+    entidades ||--o{ ventas_ordenes_compra_cliente : ""
+    ventas_ordenes_compra_cliente ||--o{ ventas_po_partidas : ""
+    ventas_po_partidas ||--o{ ventas_po_nr_vinculos : ""
+    ventas_nr_lineas ||--o{ ventas_po_nr_vinculos : ""
+    ventas_autorizaciones ||--o{ ventas_po_nr_vinculos : "autorizacion_id"
 ```
 
 RTB-INV-01 (`db/migrations/009`…`015`) añade 22 tablas nuevas a este mismo
@@ -828,6 +885,152 @@ estampa el trigger. **RLS:** 8 roles leen; `super_admin`/`direccion`/
 
 ---
 
+## RTB-VEN-01 — Ventas
+
+Detalle completo (decisiones confirmadas con el dueño del proyecto,
+2026-08-07) en `sessions/2026-08-07-modulo-ventas.md`. Aquí sólo el
+resumen de columnas — el DDL de `db/migrations/028`…`034` manda.
+
+### Los tres niveles de precio (`028`)
+
+- **`producto_familias.margen_porcentaje`** `numeric(6,3)`, nullable, `0..1000`.
+  Fuera del `GRANT UPDATE` de `009` — sólo escribible por
+  `PATCH /api/ventas/margenes/[familiaId]` (`service_role` tras validar
+  `super_admin`/`direccion`). `NULL` = "producto de esa familia sin precio
+  de venta calculable", sin margen global de respaldo a propósito.
+- **`producto_precio_venta`** (override manual que congela la fórmula):
+  `producto_id`, `precio_manual`, `motivo` (obligatorio), `activo`,
+  `definido_por`/`definido_at`, `desactivado_at`/`_por`/`_motivo`. Único
+  activo por producto (índice parcial). Sin `GRANT INSERT/UPDATE` para
+  `authenticated` — sólo `producto_precio_venta_fijar()`/`_revertir()`
+  (`super_admin`/`direccion`) la escriben; fijar uno nuevo desactiva el
+  anterior, nunca edita en sitio.
+- **`producto_precios_referencia`** (`010`) sin cambio de estructura —
+  estrechado el `INSERT`/`UPDATE` a `super_admin`/`direccion`/`compras`:
+  `ventas` pasó a sólo lectura (dos de los tres precios que el vendedor
+  ELIGE ya no los puede EDITAR).
+
+El "Costo de Venta" que ve el vendedor es
+`coalesce(override activo, costo_promedio_global() × (1+margen))` —
+`costo_promedio_global()` es **nueva**, pondera TODAS las ubicaciones (a
+diferencia de `costo_unitario_vigente()`, que el kardex sigue usando sin
+cambios).
+
+### Congelamiento de cartera y política de cliente (`029`)
+
+- **`clientes.requiere_po`** `boolean`, **`clientes.tipo_cliente`**
+  (`cliente_tipo`) — política de facturación; no calcula el reloj de
+  cobranza (RTB-PRO-FAC-01, fuera de esta entrega).
+- **`cliente_congelamientos`**: `entidad_id`, `motivo`, `saldo_origen`
+  (informativo — sin cómputo automático), `autorizado_por`,
+  `evidencia_path`, `estado` (`activo`/`liberado`), `congelado_at`,
+  `liberado_at`/`_por`/`motivo_liberacion`. Un solo `activo` por entidad
+  (índice único parcial). `GRANT INSERT` sin `estado`; sólo
+  `super_admin`/`direccion` insertan/liberan.
+- **`cliente_excepciones`**: autorización temporal con tope de monto y
+  vigencia. `autorizador_id ≠ solicitante_id` (`CHECK`, mismo patrón que
+  `aju_no_autoaprobacion_chk`). Resolución sólo por
+  `POST /api/ventas/excepciones/[id]/resolver` (`service_role`) — sin
+  `GRANT UPDATE` en absoluto, ni siquiera para Dirección.
+- **`entidades.estado` no se toca**: sigue siendo sólo el bloqueo
+  administrativo. `cliente_puede_operar(entidad_id)` cruza ambos mundos y
+  da el veredicto único: `normal`\|`descongelada`\|`excepcion_autorizada`\|
+  `en_revision`\|`congelada`\|`bloqueada`.
+
+### `ventas_cotizaciones` / `ventas_cotizacion_lineas` (`030`)
+
+| Columna clave | Notas |
+|---|---|
+| `folio` | `COT-000000` |
+| `entidad_id`, `vendedor_id` | `vendedor_id` filtra la RLS: un `ventas` sólo administra las suyas |
+| `estado` | `ventas_cotizacion_estado`; **sin `GRANT UPDATE`** — toda transición pasa por función |
+| `vigencia_hasta` | obligatoria para poder enviarse |
+
+`ventas_cotizacion_lineas` es el corazón del snapshot:
+`precio_unitario`/`costo_base_snapshot`/`margen_snapshot` **nunca** están
+en un `GRANT` — los resuelve el trigger
+`ventas_cotizacion_linea_before_write()` según `precio_origen` (lo único
+que el cliente elige), y lanza `22023` si el precio no tiene costo.
+`en_consulta` es enteramente calculado (no hay `GRANT` sobre esa columna):
+`true` mientras falte `producto_id` o falte `precio_origen`. El trigger
+congela el snapshot con `RAISE` (no reset silencioso) en cuanto la
+cotización sale de `borrador`. "Quitar una línea" = `activo=false`, nunca
+`DELETE`.
+
+`ventas_consultas_compras` formaliza Compras-ligero: el vendedor levanta
+la consulta con descripción libre SIN que el producto exista; el bloque
+de respuesta (`producto_id`, `costo_unitario`, …) sólo lo escribe
+`ventas_consulta_responder()` (`compras`/`direccion`/`super_admin`) — sin
+`GRANT UPDATE` para nadie más, así `ventas` no gana acceso de facto a dar
+de alta productos.
+
+`ventas_aprobaciones` (evidencia de aprobación del cliente): `canal`,
+`evidencia_path`, `referencia`, `contacto_id`, `datos_faltantes text[]`
+acotado por `CHECK` a la lista cerrada (`contacto_no_identificado`,
+`monto_no_confirmado`, `fecha_entrega_no_confirmada`,
+`condicion_pago_no_confirmada`, `po_pendiente`,
+`datos_fiscales_pendientes`). Append-only, escrita sólo por
+`ventas_cotizacion_aprobar()`.
+
+### `ventas_pedidos` / `ventas_pedido_lineas` + `inventario_apartados` (`031`)
+
+Nace únicamente por `ventas_cotizacion_aprobar()` (**sin** `GRANT INSERT`
+para `authenticated` en ninguna de las dos tablas). `requiere_po` es una
+**foto** de `clientes.requiere_po` al momento de aprobar, no una
+referencia viva.
+
+`inventario_apartados` (`011`) gana `nivel` (`apartado_nivel`:
+`reserva`\|`compromiso`) y `pedido_id` (FK real; `pedido_folio` se
+conserva). Un solo acumulador `cantidad_apartada` para ambos niveles — la
+promoción reserva→compromiso (`ventas_pedido_liberar_almacen()`) es un
+`UPDATE` que sólo cambia `nivel`, nunca toca el acumulador.
+`apartados_before_update()` (`011`) se reemplaza para congelar también
+`pedido_id` y prohibir `compromiso→reserva`. El `GRANT INSERT` de la tabla
+(antes de tabla completa) se restringe a
+`(producto_id, ubicacion_id, cantidad, pedido_folio)` — cierra que
+`ventas`/`almacen` pudieran forjar `nivel`/`pedido_id` al dar de alta un
+apartado.
+
+### `ventas_notas_remision` / `ventas_nr_lineas` / `ventas_nr_seguimientos` (`032`)
+
+El tablero de seguimiento de RTB-PRO-VEN-01 §III. Una NR por pedido
+(simplificación de alcance: sólo Vía A — PO directa sin NR queda fuera de
+esta entrega, ver TODO en `CLAUDE.md`). `facturada`/`pagada_cerrada`
+existen en el enum pero ninguna función de esta entrega los escribe.
+`cantidad_entregada` de cada línea la actualiza exclusivamente
+`ventas_nr_despachar()`, que inserta el movimiento de kardex
+(`salida_venta`, ligado al `apartado_id`) y consume/parte el apartado
+comprometido — un despacho parcial deja el remanente como fila **nueva**
+(el alcance de un apartado es inmutable). `ventas_nr_seguimientos` es
+append-only; un trigger cachea el último registro en la cabecera de la NR.
+
+### `ventas_ordenes_compra_cliente` / `ventas_po_partidas` / `ventas_po_nr_vinculos` (`033`)
+
+La tabla de asignación N↔M por partida — decisión técnica central del
+documento del dueño del proyecto. `numero_po_normalizado` (columna
+generada, `nullif(upper(btrim(...)),'')`) respalda el índice único parcial
+por entidad (posible PO duplicada → incidencia, no asunción automática).
+
+"Cantidad/monto respaldado por PO" se calcula **siempre** por agregación
+con `filter (where estado in ('validado','aprobado_para_facturacion','facturado'))`
+sobre `ventas_po_nr_vinculos` — nunca un contador denormalizado. Dos
+*constraint triggers* `DEFERRABLE INITIALLY DEFERRED`
+(`vinculo_valida_cobertura_nr`/`_partida`) impiden que la cobertura exceda
+lo entregado de la NR o lo declarado de la partida. Sin `GRANT
+INSERT/UPDATE` para `authenticated` en `ventas_po_nr_vinculos` — sólo
+`ventas_po_validar()` los escribe, y esa función bloquea **la PO
+completa** si una sola partida tiene costo unitario distinto al de su NR
+(sin excepción posible salvo subtotal coincidente + autorización de
+`ventas_autorizaciones`).
+
+`ventas_autorizaciones` (excepción de subtotal, código divergente,
+duplicidad confirmada, corrección de documento) es tabla propia — **no**
+extiende `solicitudes_cambio`/`cambio_controlado` (`ALTER TYPE ... ADD
+VALUE` no es seguro dentro de la transacción de `apply_migration`). Mismo
+`CHECK` anti-autoaprobación que `aju_no_autoaprobacion_chk`.
+
+---
+
 ## Buckets de Storage
 
 | Bucket | Visibilidad | Límite | MIME | Acceso | Escritura |
@@ -835,6 +1038,7 @@ estampa el trigger. **RLS:** 8 roles leen; `super_admin`/`direccion`/
 | `comprobantes-bancarios` (`004`) | Privado | 10 MB | pdf/jpeg/png | URL firmada 60s (`.../comprobante`) | `service_role` tras `requireApiRole` |
 | `soportes-inventario` (`013`) | Privado | 10 MB | pdf/jpeg/png | URL firmada 60s | `service_role` tras `requireApiRole` |
 | `productos-imagenes` (`021`) | **Público** | 5 MB | jpeg/png/webp | URL pública permanente (`lib/storage/publico.ts`) | `service_role` tras `requireApiRole` |
+| `evidencias-ventas` (`029`) | Privado | 10 MB | pdf/jpeg/png | URL firmada 60s | `service_role` tras `requireApiRole` |
 
 Regla de cuándo usar cuál: archivo con dato de un tercero o evidencia
 contable (comprobante, factura, identificación) → bucket **privado** +
@@ -875,6 +1079,12 @@ URLs, nunca en código `'use client'`.
   `autorizador_id`/`solicitante_id`/`aprobador`-tipo en las tablas nuevas
   de RTB-INV-01 — mismo patrón ya aceptado desde RTB-ENT-01 (auditoría de
   fila, no se filtra por esa columna en ninguna consulta real).
+- RTB-VEN-01 añade ~25 funciones `SECURITY DEFINER` más a la lista de RPC
+  expuestas (`cliente_puede_operar`, `costo_venta_detalle`,
+  `ventas_cotizacion_aprobar`, `ventas_nr_despachar`, `ventas_po_validar`,
+  etc.) — mismo criterio ya aceptado: cada una valida el rol de negocio
+  (`current_user_role()`) y el actor (`auth.uid()`) **dentro** de la
+  función, no depende de que PostgREST oculte el endpoint.
 - `unused_index` sobre las ~45 FK de negocio de RTB-INV-01 (`producto_id`,
   `ubicacion_id`, `conteo_id`, `ajuste_id`...) — esperable con la base
   vacía; si persiste con datos reales de producción, revisar entonces.

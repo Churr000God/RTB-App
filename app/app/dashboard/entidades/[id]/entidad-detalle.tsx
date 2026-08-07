@@ -14,6 +14,7 @@ import {
   UMBRAL_APROBACION_CREDITO,
 } from '@/lib/entidades/config';
 import { EntidadEstadoBadge } from '@/components/entidades/estado-badge';
+import { CarteraComercialTab } from '@/components/ventas/cartera-comercial-tab';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -197,6 +198,7 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="contactos">Contactos y direcciones</TabsTrigger>
           {proveedor && <TabsTrigger value="cuentas">Cuenta bancaria</TabsTrigger>}
+          {cliente && <TabsTrigger value="cartera">Cartera y política comercial</TabsTrigger>}
           <TabsTrigger value="auditoria">Auditoría</TabsTrigger>
         </TabsList>
 
@@ -304,6 +306,17 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
         {proveedor && (
           <TabsContent value="cuentas" className="mt-4">
             <CuentasBancarias proveedorId={proveedor.id} />
+          </TabsContent>
+        )}
+
+        {cliente && (
+          <TabsContent value="cartera" className="mt-4">
+            <CarteraComercialTab
+              entidadId={entidad.id}
+              requierePo={cliente.requiere_po}
+              tipoCliente={cliente.tipo_cliente}
+              rol={role}
+            />
           </TabsContent>
         )}
 

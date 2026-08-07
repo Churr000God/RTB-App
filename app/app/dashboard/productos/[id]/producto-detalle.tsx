@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { PrecioVentaTab } from '@/components/ventas/precio-venta-tab';
 import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -134,6 +135,7 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
           <TabsTrigger value="existencias">Existencias</TabsTrigger>
           <TabsTrigger value="kardex">Kardex</TabsTrigger>
           <TabsTrigger value="costos">Costos</TabsTrigger>
+          <TabsTrigger value="precio-venta">Precio de venta</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general">
@@ -163,6 +165,9 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
         </TabsContent>
         <TabsContent value="costos">
           <CostosTab productoId={producto.id} costoVigente={costoVigente} />
+        </TabsContent>
+        <TabsContent value="precio-venta">
+          <PrecioVentaTab productoId={producto.id} rol={role} />
         </TabsContent>
       </Tabs>
     </div>

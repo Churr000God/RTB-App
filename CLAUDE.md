@@ -75,7 +75,7 @@ contexto/                 # documentos de negocio, marca y specs de cada módulo
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
 | 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
 | 3 | RTB-INV-01 Productos, Costos e Inventario (catálogo, kardex, conteos, discrepancias, ajustes) | ✅ Base funcional (auditado 2026-08-05) |
-| 4 | Ventas | 🔜 Planificado |
+| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por partida) | ✅ Base funcional (2026-08-07) — Vía B sin NR pendiente |
 | 5 | Compras | 🔜 Planificado |
 | 6 | Almacén | 🔜 Planificado |
 | 7 | Rutas | 🔜 Planificado |
@@ -87,7 +87,12 @@ RTB-INV-01 tienen su propio par: `contexto/RTB-ENT-01_Modulo_Entidades.md` /
 `contexto/RTB-INV-01_Modulo_Productos_Inventario.md` (spec corregida, la que
 manda) y `contexto/AUDITORIA_RTB-ENT-01.md` /
 `contexto/AUDITORIA_RTB-INV-01.md` (qué traía cada paquete original y qué se
-corrigió).
+corrigió). RTB-VEN-01 tiene `contexto/RTB-VEN-01_Modulo_Ventas.md` (spec
+corregida, la que manda sobre `RTB-PRO-VEN-01_Modulo_Ventas.md`) — sin
+`AUDITORIA_` propia, porque el diseño se cerró en vivo con el dueño del
+proyecto vía preguntas dirigidas, no auditando un paquete externo con
+contradicciones; el detalle de esas decisiones vive en
+`sessions/2026-08-07-modulo-ventas.md`.
 
 ## Identidad visual
 
@@ -369,6 +374,36 @@ corrigió).
   clasificarla todavía, la liga va por el lado que no tiene `CHECK`:
   `inventario_ajuste_lineas.discrepancia_id`, no
   `inventario_discrepancias.ajuste_id`.
+- **Un `new.col := old.col` incondicional en un `BEFORE UPDATE` revierte
+  también las escrituras legítimas de una función `SECURITY DEFINER` —
+  "defensa en profundidad" que en realidad rompe la defensa principal.**
+  `ventas_cotizacion_before_update()` (030) congelaba `estado`/`enviada_at`/
+  `enviada_por`/etc. con una asignación incondicional, "por si acaso",
+  aunque esas columnas ya estaban fuera de todo `GRANT UPDATE` (la barrera
+  real). Resultado: `ventas_cotizacion_enviar()` hacía su `UPDATE ... SET
+  estado='enviada'`, el trigger disparaba, y el mismo trigger revertía
+  `estado` a `'borrador'` antes de guardar — la función devolvía
+  `{success:true}` sin haber cambiado nada. Encontrado verificando el
+  flujo real con SQL (el estado seguía en `'borrador'` tras un "envío"
+  supuestamente exitoso). Regla general: si una columna ya está protegida
+  por privilegio de columna (GRANT), un trigger **no** necesita
+  congelarla de nuevo con una asignación ciega — sólo debe rechazar con
+  `RAISE` los cambios que sí lleguen por una vía con permiso (columnas de
+  cabecera editables), nunca reasignar en silencio columnas que las
+  funciones de confianza necesitan poder escribir.
+- **Un `CASE WHEN ... THEN 'texto' ELSE 'texto' END` sin cast explícito
+  falla con `42804` al asignarse a una columna enum, aunque un literal
+  suelto (`SET col = 'valor'`) funcione sin problema en el mismo
+  contexto.** `ventas_nr_despachar()` (032) tenía
+  `set estado = case when v_pendientes = 0 then 'entregada_sin_po' else
+  'parcialmente_entregada' end` sobre una columna `nr_estado` — Postgres
+  no resuelve el tipo `unknown` de los literales de un `CASE` usando el
+  tipo de la columna destino como si fuera una asignación simple. Se
+  corrige casteando cada rama: `... end::public.nr_estado`. Regla general:
+  cualquier `CASE` con literales de texto que se asigne a una columna
+  enum dentro de un `UPDATE ... SET` necesita el cast explícito en el
+  `CASE` completo (o en cada rama), no basta con que la columna ya tenga
+  el tipo correcto.
 
 ## Historial de decisiones
 
@@ -730,6 +765,51 @@ corrigió).
   la sesión activa — la cookie de Supabase Auth es por origen, no por
   pestaña (ver Gotchas), así que cualquier otra sesión abierta en el mismo
   navegador se desconectó también.
+- **2026-08-07 (sesión aparte)** — Primer submódulo de RTB-VEN-01 (Ventas):
+  cotización con snapshot de precio, Compras-ligero formalizado, reserva/
+  compromiso de inventario, Nota de Remisión con despacho al kardex, y
+  validación de PO del cliente contra la NR por partida. Punto de partida:
+  documento de reglas de negocio del dueño del proyecto que amplía
+  `contexto/RTB-PRO-VEN-01_Modulo_Ventas.md` (proceso puro, sin modelo de
+  datos) con la decisión técnica central — "PO↔NR no es una llave foránea
+  directa, es una tabla de asignación por partida" — y una serie de
+  decisiones confirmadas vía `AskUserQuestion` antes de implementar: el
+  Costo de Venta es una fórmula viva (costo base ponderado × margen de
+  FAMILIA) con override manual que congela; el precio elegido en una
+  línea se fotografía y nunca cambia después, sin importar qué pase con
+  el costo/margen; Compras-ligero es precondición dura (un producto sin
+  costo no se cotiza); el congelamiento de cartera vive en tablas nuevas,
+  separado de `entidades.estado`; reserva/compromiso son un solo nivel
+  nuevo sobre `inventario_apartados` (no dos tablas ni dos acumuladores);
+  una sola partida de PO con costo distinto bloquea la PO completa, sin
+  excepción salvo subtotal coincidente autorizado por Dirección. Siete
+  migraciones nuevas (`028_ventas_precios.sql` … `034_ventas_tablero.sql`,
+  ~20 tablas, ~30 funciones `SECURITY DEFINER`), cada una verificada con
+  SQL simulando rol real (`set local role authenticated` +
+  `set_config('request.jwt.claim.sub', ...)` — el UUID debe ser un
+  literal resuelto ANTES de cambiar de rol, porque una subconsulta contra
+  `profiles` bajo RLS sin `auth.uid()` todavía puesto devuelve cero filas
+  en silencio) contra datos reales insertados y luego revertidos con
+  `rollback`, nunca sólo contra la lectura del código. La verificación
+  encontró y corrigió dos bugs reales antes de que hubiera datos en
+  riesgo (ver Gotchas): un trigger que revertía en silencio las propias
+  transiciones de estado que sus funciones `SECURITY DEFINER` intentaban
+  escribir, y un `CASE` sin cast explícito que fallaba `42804` al
+  asignarse a una columna enum. De paso: se cerró el TODO histórico de
+  `public.tiene_operaciones_abiertas()` (002, siempre `false` desde el
+  primer día) y se estrechó `producto_precios_referencia` (010) para que
+  `ventas` deje de poder editar dos de los tres precios que el propio
+  vendedor elige al cotizar. Capa de API (~35 rutas) y UI (~20 pantallas)
+  verificadas con `docker build --target builder` (TypeScript real,
+  `ignoreBuildErrors: false`) y `get_advisors` sin `ERROR` nuevo. **Alcance
+  explícitamente dejado fuera** (ver TODO): la Vía B de RTB-PRO-VEN-01
+  (PO directa del cliente, sin NR) no tiene una función de despacho
+  dedicada — el pedido se aprueba y libera igual, pero su entrega/kardex
+  queda pendiente de diseño; y el reloj de cobranza/CFDI/pagos son
+  RTB-PRO-FAC-01, módulo futuro (`nr_estado` ya incluye
+  `facturada`/`pagada_cerrada`, pero ninguna función de este módulo los
+  escribe). Detalle completo de la sesión en
+  `sessions/2026-08-07-modulo-ventas.md`.
 
 ## TODO
 
@@ -766,3 +846,20 @@ corrigió).
   en memoria que ya funciona sin resolver ningún problema de escala real.
   Revisar sólo si el criterio de acceso cambiara (p.ej. autoservicio de
   cuentas para terceros).
+- **RTB-VEN-01 — Vía B (PO directa del cliente, sin NR) sin implementar.**
+  El esquema de `032`/`033` está diseñado para admitirla (`ventas_notas_
+  remision` es `unique (pedido_id)` sólo porque esta entrega asumió una NR
+  por pedido, no porque el modelo lo exija) pero no existe ninguna función
+  de despacho que mueva kardex sin pasar por una NR — hoy todo pedido
+  aprobado necesita `ventas_nr_emitir()` antes de poder recibir un
+  `ventas_nr_despachar()`. Pendiente: decidir con el dueño del proyecto si
+  Vía B despacha contra la PO directamente (nueva función espejo de
+  `ventas_nr_despachar()` que consuma el apartado sin exigir `nr_id`) o si,
+  en la práctica, toda venta real de RTB pasa por NR y Vía B puede
+  descartarse del todo en vez de construirse.
+- **RTB-VEN-01 — reloj de cobranza y CFDI son RTB-PRO-FAC-01, módulo
+  futuro.** `clientes.tipo_cliente` (029) ya guarda la configuración por
+  cliente y `nr_estado` (032) ya incluye `facturada`/`pagada_cerrada`, pero
+  ninguna función de esta entrega los escribe ni calcula antigüedad de
+  saldo vencido — el congelamiento de cartera (`cliente_congelamientos`)
+  se sigue registrando a mano por Dirección hasta que exista ese módulo.

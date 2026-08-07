@@ -35,7 +35,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { response } = await requireApiRole(['super_admin', 'direccion', 'ventas', 'compras']);
+    // 'ventas' salió de este alta en 028_ventas_precios.sql: dos de los tres
+    // precios que el vendedor ELIGE al cotizar vivían en una tabla que el
+    // propio vendedor podía editar. Ver lib/inventario/permisos.ts.
+    const { response } = await requireApiRole(['super_admin', 'direccion', 'compras']);
     if (response) return response;
 
     const parsed = precioReferenciaCreateSchema.safeParse(await request.json().catch(() => null));

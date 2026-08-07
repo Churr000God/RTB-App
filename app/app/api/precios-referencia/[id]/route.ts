@@ -7,7 +7,11 @@ import { precioReferenciaUpdateSchema } from '@/lib/inventario/schemas';
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   try {
-    const { response } = await requireApiRole(['super_admin', 'direccion', 'ventas', 'compras']);
+    // 'ventas' salió de esta edición en 028_ventas_precios.sql (ver
+    // lib/inventario/permisos.ts) — sin este cambio, RLS ya lo bloqueaba
+    // (data.length === 0 más abajo), pero con un 403 genérico en vez de que
+    // requireApiRole() lo rechace con el mensaje estándar de permisos.
+    const { response } = await requireApiRole(['super_admin', 'direccion', 'compras']);
     if (response) return response;
 
     const parsed = precioReferenciaUpdateSchema.safeParse(await request.json().catch(() => null));

@@ -102,6 +102,10 @@ export interface Cliente {
   descuento_maximo: number;
   vendedor_id: string | null;
   canal_origen: CanalOrigen | null;
+  // RTB-VEN-01 (029_ventas_congelamientos.sql) — política de facturación,
+  // no calcula el reloj de cobranza (eso es RTB-PRO-FAC-01).
+  requiere_po: boolean;
+  tipo_cliente: 'credito' | 'contado' | 'pago_anticipado' | 'facturacion_inmediata';
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
