@@ -991,6 +991,17 @@ promoción reserva→compromiso (`ventas_pedido_liberar_almacen()`) es un
 `ventas`/`almacen` pudieran forjar `nivel`/`pedido_id` al dar de alta un
 apartado.
 
+**⚠️ Limitación conocida, sin corregir:** la tabla no liga cada apartado a
+la línea de pedido que lo originó (sólo a `pedido_id`, no
+`pedido_linea_id`). `ventas_nr_despachar()` (`032`) empareja apartado↔línea
+de NR sólo por `producto_id` con `order by created_at limit 1` — si un
+pedido tiene dos o más líneas del mismo producto, puede consumir el
+apartado equivocado y rechazar en falso un despacho legítimo. Confirmado
+por SQL y clic a clic con datos reales; ver
+`contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1 y
+`db/procesos/ciclo-de-venta.md` §5. Corrección propuesta: añadir
+`pedido_linea_id`/`nr_linea_id` aquí.
+
 ### `ventas_notas_remision` / `ventas_nr_lineas` / `ventas_nr_seguimientos` (`032`)
 
 El tablero de seguimiento de RTB-PRO-VEN-01 §III. Una NR por pedido

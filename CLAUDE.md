@@ -75,7 +75,7 @@ contexto/                 # documentos de negocio, marca y specs de cada módulo
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
 | 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
 | 3 | RTB-INV-01 Productos, Costos e Inventario (catálogo, kardex, conteos, discrepancias, ajustes) | ✅ Base funcional (auditado 2026-08-05) |
-| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por partida) | ✅ Base funcional (2026-08-07) — Vía B sin NR pendiente |
+| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por partida) | ✅ Base funcional (auditado 2026-08-07) — 1 hallazgo crítico abierto en despacho, Vía B sin NR pendiente |
 | 5 | Compras | 🔜 Planificado |
 | 6 | Almacén | 🔜 Planificado |
 | 7 | Rutas | 🔜 Planificado |
@@ -88,11 +88,15 @@ RTB-INV-01 tienen su propio par: `contexto/RTB-ENT-01_Modulo_Entidades.md` /
 manda) y `contexto/AUDITORIA_RTB-ENT-01.md` /
 `contexto/AUDITORIA_RTB-INV-01.md` (qué traía cada paquete original y qué se
 corrigió). RTB-VEN-01 tiene `contexto/RTB-VEN-01_Modulo_Ventas.md` (spec
-corregida, la que manda sobre `RTB-PRO-VEN-01_Modulo_Ventas.md`) — sin
-`AUDITORIA_` propia, porque el diseño se cerró en vivo con el dueño del
-proyecto vía preguntas dirigidas, no auditando un paquete externo con
-contradicciones; el detalle de esas decisiones vive en
-`sessions/2026-08-07-modulo-ventas.md`.
+corregida, la que manda sobre `RTB-PRO-VEN-01_Modulo_Ventas.md`); a
+diferencia de RTB-ENT-01/RTB-INV-01, su diseño se cerró en vivo con el
+dueño del proyecto vía preguntas dirigidas, no auditando un paquete
+externo con contradicciones — ese detalle vive en
+`sessions/2026-08-07-modulo-ventas.md`. Sí tiene, en cambio,
+`contexto/AUDITORIA_RTB-VEN-01.md` (2026-08-07, mismo día): una auditoría
+end-to-end del módulo YA CONSTRUIDO (no del paquete de origen, que no
+existía), con un hallazgo crítico confirmado por reproducción en vivo
+contra Supabase — ver TODO.
 
 ## Identidad visual
 
@@ -404,6 +408,22 @@ contradicciones; el detalle de esas decisiones vive en
   enum dentro de un `UPDATE ... SET` necesita el cast explícito en el
   `CASE` completo (o en cada rama), no basta con que la columna ya tenga
   el tipo correcto.
+- **`<Tooltip>` de Radix (`components/ui/tooltip.tsx`) exige un
+  `<TooltipProvider>` ancestro — ni global ni implícito.** El proyecto no
+  tiene ningún `TooltipProvider` en `app/layout.tsx` ni en
+  `app/dashboard/layout.tsx`; el único uso previo
+  (`app/dashboard/admin/users/page.tsx`) lo envuelve localmente. Al
+  auditar RTB-VEN-01 clic a clic (`contexto/AUDITORIA_RTB-VEN-01.md`,
+  2026-08-07) se encontró `cotizacion-detalle.tsx` usando `<Tooltip>` sin
+  envolverlo — crash inmediato (`Error: Tooltip must be used within
+  TooltipProvider`) al elegir cualquier producto en "Agregar línea",
+  bloqueando por completo esa pantalla desde el navegador aunque
+  `npx tsc`/`docker build` nunca lo habrían atrapado (es un error sólo en
+  tiempo de ejecución del cliente). Corregido en el momento envolviendo
+  ese `<Tooltip>` en un `<TooltipProvider>` local. Regla general:
+  cualquier `<Tooltip>` nuevo necesita su propio `<TooltipProvider>`
+  local (o uno global habría que agregarlo a los layouts) — no asumir que
+  ya existe uno más arriba en el árbol.
 
 ## Historial de decisiones
 
@@ -810,9 +830,64 @@ contradicciones; el detalle de esas decisiones vive en
   `facturada`/`pagada_cerrada`, pero ninguna función de este módulo los
   escribe). Detalle completo de la sesión en
   `sessions/2026-08-07-modulo-ventas.md`.
+- **2026-08-07 (sesión aparte, auditoría posterior)** — Auditoría de punta
+  a punta de RTB-VEN-01 pedida por el dueño del proyecto, en dos fases:
+  (1) lectura completa de las 7 migraciones + capa compartida + API +
+  pantallas de mayor complejidad, con reproducción por SQL
+  (`BEGIN`/`ROLLBACK`, sin datos persistidos) del hallazgo #1; (2) a
+  petición explícita del dueño del proyecto, verificación clic a clic con
+  la extensión Claude in Chrome y los 8 usuarios QA (nunca la cuenta real
+  del dueño), creando datos de prueba **desde la interfaz** porque el
+  catálogo seguía vacío (familia con margen, producto, existencia real
+  vía un Ajuste autorizado end-to-end, cotización con 2 líneas del mismo
+  producto, pedido, NR, despacho). La fase 2 confirmó el hallazgo #1 con
+  datos reales y persistidos (`COT-000039`/`PED-000019`/`NR-000014`) —
+  mismo resultado exacto que la simulación por SQL — y encontró un
+  defecto más grave en severidad práctica: `cotizacion-detalle.tsx`
+  usaba `<Tooltip>` de Radix sin `<TooltipProvider>` (ningún layout del
+  proyecto lo provee globalmente), lo que tronaba la pantalla completa al
+  elegir cualquier producto en "Agregar línea" — bloqueaba por completo
+  el alta de líneas de cotización desde el navegador, en cualquier rol.
+  Corregido en el momento (una línea + un `TooltipProvider` local,
+  `npx tsc --noEmit` limpio) por ser trivial y bloquear el resto de la
+  verificación — ver gotcha nuevo en Gotchas conocidos. Hallazgos
+  adicionales, todos menores: la UI no refresca tras una mutación exitosa
+  en al menos 3 puntos del ciclo (agregar línea, aprobar cotización, y en
+  Ajustes de RTB-INV-01: enviar/autorizar/aplicar — mismo patrón, código
+  2xx pero pantalla sin actualizar sin recargar); el UUID crudo del
+  producto se muestra en vez de su nombre en cotización/pedido/NR; la
+  tarjeta "Ventas" del dashboard principal seguía con badge
+  "Próximamente" pese a estar ya activo; "Costo vigente" en producto no
+  se refresca tras registrar un costo nuevo. Detalle completo de cada
+  hallazgo, con reproducción paso a paso, en
+  `contexto/AUDITORIA_RTB-VEN-01.md` — actualizado también
+  `db/ESQUEMA.md` (nota en `inventario_apartados`) y
+  `db/procesos/ciclo-de-venta.md` (nota en §5 y en "Qué puede fallar").
+  Los datos `QA-*`/`COT-000039`/`PED-000019`/`NR-000014`/`AJU-000016..18`
+  creados durante la verificación quedaron persistidos como evidencia,
+  mismo criterio que otras campañas QA del proyecto — no se purgaron.
 
 ## TODO
 
+- **RTB-VEN-01 — `ventas_nr_despachar()` puede consumir la reserva
+  equivocada cuando un pedido tiene 2+ líneas del mismo producto.**
+  Auditoría de punta a punta del módulo (2026-08-07,
+  `contexto/AUDITORIA_RTB-VEN-01.md`), hallazgo #1 — confirmado dos veces:
+  primero con reproducción por SQL (transacción con `ROLLBACK`, sin datos
+  persistidos) y después, en una sesión posterior el mismo día, clic a
+  clic con la extensión Claude in Chrome usando datos reales y
+  persistidos (`COT-000039`/`PED-000019`/`NR-000014`, usuario `QA
+  Almacén`) — mismo resultado exacto en ambos casos.
+  `inventario_apartados` no liga cada reserva a la línea de pedido/NR que
+  la originó (sólo `producto_id`), así que `order by created_at limit 1`
+  puede consumir el apartado de la línea incorrecta y luego rechazar un
+  despacho legítimo con "la reserva comprometida no alcanza" aunque el
+  total reservado sea suficiente. Corrección propuesta: añadir
+  `pedido_linea_id`/`nr_linea_id` a `inventario_apartados`, poblarlo desde
+  `ventas_cotizacion_aprobar()` (031) y filtrar por esa columna en
+  `ventas_nr_despachar()` (032) — pendiente de programar como tarea aparte
+  con su propia migración y verificación, antes de que existan despachos
+  reales con cotizaciones que repitan producto.
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está

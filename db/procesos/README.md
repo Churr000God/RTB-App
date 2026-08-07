@@ -45,4 +45,8 @@ referenciarlo desde su propia gestión de dirección/coordenada.
 primer submódulo de RTB-VEN-01): cotización con snapshot de precio,
 Compras-ligero formalizado, reserva/compromiso de inventario, Nota de
 Remisión y despacho al kardex, y la validación de PO por partida contra
-la NR.
+la NR. Auditado ese mismo día (código + SQL, y en una segunda pasada
+clic a clic con Claude in Chrome y datos reales) — detalle de hallazgos
+en `contexto/AUDITORIA_RTB-VEN-01.md`, incluido un defecto confirmado y
+sin corregir en `ventas_nr_despachar()` (ver "Qué puede fallar" en
+`ciclo-de-venta.md`).

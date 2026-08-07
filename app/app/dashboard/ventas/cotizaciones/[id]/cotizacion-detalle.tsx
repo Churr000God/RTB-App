@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ProductoCombobox } from '@/components/inventario/producto-combobox';
 import { CotizacionEstadoBadge } from '@/components/ventas/estado-badge';
 import { MotivoDialog } from '@/components/inventario/motivo-dialog';
@@ -378,20 +378,22 @@ function AgregarLineaForm({
             <ToggleGroupItem value="ariba" disabled={!precios?.ariba} className="text-xs">
               Ariba {precios?.ariba ? formatearMoneda(precios.ariba.precio) : '(sin dato)'}
             </ToggleGroupItem>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <ToggleGroupItem value="costo_venta" disabled={!precios?.costo_venta?.calculable} className="text-xs">
-                    Costo de Venta {precios?.costo_venta?.calculable ? formatearMoneda(precios.costo_venta.costo_venta) : '(sin margen/costo)'}
-                  </ToggleGroupItem>
-                </span>
-              </TooltipTrigger>
-              {!precios?.costo_venta?.calculable && (
-                <TooltipContent>
-                  {precios?.costo_venta?.familia_sin_margen ? 'La familia no tiene margen configurado.' : 'El producto no tiene costo.'}
-                </TooltipContent>
-              )}
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <ToggleGroupItem value="costo_venta" disabled={!precios?.costo_venta?.calculable} className="text-xs">
+                      Costo de Venta {precios?.costo_venta?.calculable ? formatearMoneda(precios.costo_venta.costo_venta) : '(sin margen/costo)'}
+                    </ToggleGroupItem>
+                  </span>
+                </TooltipTrigger>
+                {!precios?.costo_venta?.calculable && (
+                  <TooltipContent>
+                    {precios?.costo_venta?.familia_sin_margen ? 'La familia no tiene margen configurado.' : 'El producto no tiene costo.'}
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
           </ToggleGroup>
         </div>
       )}

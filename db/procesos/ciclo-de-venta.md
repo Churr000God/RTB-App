@@ -6,6 +6,14 @@ cliente queda vinculada por partida contra la NR — el reloj de cobranza
 confirmadas con el dueño del proyecto en
 `sessions/2026-08-07-modulo-ventas.md`.
 
+> **⚠️ Defecto conocido, confirmado y sin corregir (2026-08-07):** el paso 5
+> (despacho) puede consumir la reserva equivocada y rechazar un despacho
+> válido cuando un pedido tiene dos o más líneas del mismo producto —
+> confirmado dos veces (SQL con `ROLLBACK` y clic a clic con datos reales).
+> Ver el último renglón de "Qué puede fallar" y
+> `contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1 para el detalle completo y
+> la corrección propuesta.
+
 ## Quién puede
 
 Cotizar/enviar/aprobar/emitir NR: `ventas` (sólo sus propias
@@ -86,6 +94,18 @@ pedido. Errores del kardex (saldo negativo, congelamiento de conteo
 activo) se propagan tal cual — un faltante se registra como discrepancia,
 no como salida forzada.
 
+**⚠️ Defecto confirmado:** el apartado a consumir se busca sólo por
+`(pedido_id, producto_id, nivel='compromiso')`, `order by created_at limit 1`
+— sin ninguna columna que lo ligue a la línea de pedido/NR específica que
+lo originó. Si un pedido tiene **dos o más líneas del mismo producto**
+(nada lo impide al cotizar), despachar fuera del orden de creación puede
+consumir el apartado de la línea equivocada y luego rechazar un despacho
+legítimo con "la reserva comprometida no alcanza" pese a que el total
+reservado sí alcanza. Confirmado por SQL y clic a clic con datos reales
+(`contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1); corrección propuesta:
+columna `pedido_linea_id`/`nr_linea_id` en `inventario_apartados`, ver
+Pendiente abajo.
+
 ## 6. PO del cliente y vínculos por partida
 
 `POST /api/ventas/ordenes-compra` registra la PO (folio interno
@@ -124,7 +144,7 @@ son la última barrera contra el doble conteo.
 | "La cotización ya expiró: no se puede aprobar" | `vigencia_hasta` pasada — se valida por fecha, no por estado, aunque la pantalla no haya refrescado |
 | "Unidad de captura incompatible con el producto" | La unidad de la línea no es la base ni la de contenido del producto |
 | "No hay una reserva comprometida para el producto..." | Se intentó despachar sin haber liberado el pedido primero |
-| "La reserva comprometida no alcanza..." | Se intentó despachar más de lo reservado para ese producto en ese pedido |
+| "La reserva comprometida no alcanza..." | Se intentó despachar más de lo reservado para ese producto en ese pedido — **o** es un falso rechazo por el defecto de emparejamiento de apartados descrito arriba (pedido con 2+ líneas del mismo producto) |
 | "Se bloquea la PO completa hasta corregir el documento del cliente" | Costo unitario distinto en al menos una partida, sin subtotal coincidente |
 | "Requiere autorización de Dirección (excepcion_subtotal)" | Subtotal coincide pero los unitarios varían, sin `autorizacion_id` vigente |
 | "El RFC declarado no coincide con el de la entidad" | Rechazo automático de la PO completa |
@@ -132,6 +152,12 @@ son la última barrera contra el doble conteo.
 
 ## Pendiente (fuera de esta entrega)
 
+- **Corregir el emparejamiento apartado↔línea en `ventas_nr_despachar()`**
+  (ver el defecto confirmado en §5) — añadir `pedido_linea_id`/
+  `nr_linea_id` a `inventario_apartados`, poblarlo desde
+  `ventas_cotizacion_aprobar()` (031) y filtrar por esa columna al
+  despachar (032). Migración nueva, no un cambio de una línea — ver TODO
+  en `CLAUDE.md` y `contexto/AUDITORIA_RTB-VEN-01.md`.
 - **Vía B (PO directa, sin NR)**: el pedido se aprueba/libera igual, pero
   no tiene una función de despacho dedicada en esta entrega — ver TODO en
   `CLAUDE.md`.
