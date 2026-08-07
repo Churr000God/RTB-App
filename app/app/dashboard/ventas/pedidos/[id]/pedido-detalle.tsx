@@ -1,41 +1,26 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { PedidoEstadoBadge } from '@/components/ventas/estado-badge';
+import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
+import { Actualizando } from '@/components/ui/actualizando';
+import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
 import type { PedidoRow, PedidoLineaRow } from '@/types/ventas';
 import { ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 
 interface Props {
   pedido: PedidoRow & { entidades: { nombre_comercial: string | null; nombre_legal: string } };
-  lineas: any[];
+  lineas: PedidoLineaRow[];
   notaRemision: { id: string; folio: string; estado: string } | null;
 }
 
-export function PedidoDetalle({ pedido: pedidoInicial, lineas, notaRemision: nrInicial }: Props) {
-  const router = useRouter();
-  const [pedido, setPedido] = useState(pedidoInicial);
-  const [notaRemision, setNotaRemision] = useState(nrInicial);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const accion = async (url: string) => {
-    setError(null);
-    setLoading(true);
-    const res = await fetch(url, { method: 'POST' });
-    const data = await res.json().catch(() => ({}));
-    setLoading(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'Ocurrió un error');
-      return;
-    }
-    router.refresh();
-    if (data.data?.folio) setNotaRemision({ id: data.data.nr_id, folio: data.data.folio, estado: 'abierta' });
-    setPedido((p) => ({ ...p, estado: url.includes('liberar') ? 'liberado' : p.estado }));
-  };
+// pedido/notaRemision llegan como props del Server Component; el estado
+// nuevo lo dice el servidor tras router.refresh() (useAccionServidor), no
+// una inferencia por el string de la URL (contexto/AUDITORIA_RTB-VEN-01.md §7.3).
+export function PedidoDetalle({ pedido, lineas, notaRemision }: Props) {
+  const { ejecutar, ocupado, refrescando, error } = useAccionServidor();
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -50,23 +35,28 @@ export function PedidoDetalle({ pedido: pedidoInicial, lineas, notaRemision: nrI
           <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-3">
             {pedido.folio}
             <PedidoEstadoBadge estado={pedido.estado} />
+            <Actualizando activo={refrescando} />
           </h1>
           <p className="text-muted-foreground mt-1">{pedido.entidades?.nombre_comercial ?? pedido.entidades?.nombre_legal}</p>
         </div>
         <div className="flex gap-2">
           {!notaRemision && pedido.estado === 'aprobado' && (
-            <Button onClick={() => accion(`/api/ventas/pedidos/${pedido.id}/nota-remision`)} disabled={loading} variant="outline">
-              {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            <Button
+              onClick={() => ejecutar(`/api/ventas/pedidos/${pedido.id}/nota-remision`, { method: 'POST' })}
+              disabled={ocupado}
+              variant="outline"
+            >
+              {ocupado && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Emitir Nota de Remisión
             </Button>
           )}
           {pedido.estado === 'aprobado' && (
             <Button
-              onClick={() => accion(`/api/ventas/pedidos/${pedido.id}/liberar`)}
-              disabled={loading}
+              onClick={() => ejecutar(`/api/ventas/pedidos/${pedido.id}/liberar`, { method: 'POST' })}
+              disabled={ocupado}
               className="bg-rtb-teal hover:bg-rtb-teal/90 text-white"
             >
-              {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {ocupado && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Liberar a Almacén
             </Button>
           )}
@@ -100,9 +90,11 @@ export function PedidoDetalle({ pedido: pedidoInicial, lineas, notaRemision: nrI
             </tr>
           </thead>
           <tbody>
-            {(lineas as PedidoLineaRow[]).map((l: any) => (
+            {lineas.map((l) => (
               <tr key={l.id} className="border-b border-border/50">
-                <td className="py-2 px-3">{l.producto_id}</td>
+                <td className="py-2 px-3">
+                  <ProductoEtiqueta producto={l.productos} productoId={l.producto_id} />
+                </td>
                 <td className="py-2 px-3 text-right tabular-nums">{l.cantidad}</td>
                 <td className="py-2 px-3 text-right tabular-nums">{formatearMoneda(l.precio_unitario)}</td>
                 <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatearMoneda(l.importe)}</td>

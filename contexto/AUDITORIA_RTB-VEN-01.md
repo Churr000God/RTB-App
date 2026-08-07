@@ -37,10 +37,13 @@ Detalle completo en §7.
 | **Alta de línea de cotización desde el navegador** | 🔴 **Crash bloqueante confirmado y corregido en vivo — ver hallazgo #2 (§7.1)** |
 | Congelamiento de cartera / excepciones | 🟢 `cliente_puede_operar()` consistente en los 4 puntos donde se invoca |
 | NR — emisión y liberación a Almacén (reserva→compromiso) | 🟢 Un solo `UPDATE`, no toca el acumulador — correcto |
-| **NR — despacho al kardex (`ventas_nr_despachar()`)** | 🔴 **Bug confirmado por SQL y de nuevo con datos reales por navegador — ver hallazgo #1** |
+| **NR — despacho al kardex (`ventas_nr_despachar()`)** | ✅ **Corregido 2026-08-07 (`035`) — ver hallazgo #1** |
 | PO del cliente — validación y vínculo por partida | 🟢 Orden de reglas (moneda→RFC→costo→excepción→código→duplicidad) correcto en SQL |
 | Rendimiento / paginación del módulo nuevo | 🟡 2 hallazgos menores — ver §3 |
-| Refresco de UI tras una mutación exitosa | 🟡 Patrón repetido en 3+ pantallas — ver §7.3 |
+| Refresco de UI tras una mutación exitosa | ✅ **Corregido 2026-08-07 — ver §7.3** |
+| UUID crudo de producto en líneas | ✅ **Corregido 2026-08-07 — ver §7.4** |
+| Tarjeta "Ventas" del dashboard ("Próximamente") | ✅ **Corregido 2026-08-07 — ver §7.5** |
+| "Costo vigente" no se refresca tras registrar costo | ✅ **Corregido 2026-08-07 — ver §7.6** |
 | `get_advisors` (seguridad) | 🟢 Sin `ERROR` nuevo — sólo `WARN` de `SECURITY DEFINER`, patrón ya aceptado |
 
 **Los dos hallazgos que hay que resolver antes de operar el módulo con usuarios reales:**
@@ -56,6 +59,23 @@ por un `Tooltip` de Radix sin `TooltipProvider` — bloqueaba por completo el
 alta de líneas desde el navegador. Ya corregido; detalle en §7.1.
 
 ## 1. Hallazgo crítico
+
+**✅ Corregido 2026-08-07** — migración `db/migrations/035_apartados_pedido_linea.sql`,
+aplicada sobre `RTB-App` (`dgafffpbhktxadiqmmwl`). Se añadió
+`inventario_apartados.pedido_linea_id` (FK compuesta a
+`ventas_pedido_lineas (id, pedido_id)`, `MATCH SIMPLE`), poblado desde
+`ventas_cotizacion_aprobar()` al nacer cada reserva y respaldado por un
+índice único parcial (`uq_apartados_pedido_linea_activo`: como máximo una
+reserva activa por línea de pedido). `ventas_nr_despachar()` empareja
+ahora por esa columna en vez de `producto_id` + `order by created_at
+limit 1`. Los 3 apartados históricos de `PED-000019` (la evidencia de
+este mismo hallazgo) se backfillearon en la misma migración — la
+incoherencia que el bug dejó (línea A sub-reservada, línea B con un
+apartado huérfano) se documentó tal cual, sin sanearla. Verificado con
+matriz SQL (rol real simulado, `BEGIN/ROLLBACK`) y clic a clic con
+usuarios QA reproduciendo el escenario exacto de abajo (§7.2) con datos
+nuevos y persistidos. El hallazgo original se conserva íntegro a
+continuación como registro de lo que falló y por qué.
 
 ### #1 (S1) — Emparejamiento apartado↔línea por sólo `producto_id`, sin identificar la línea de origen
 
@@ -195,6 +215,25 @@ repetido.
 
 ## 3. Rendimiento y optimizaciones
 
+**Actualización 2026-08-07 (sesión aparte) — §3.1 a §3.6 atendidos.**
+Detalle completo (decisiones, migración `036`, verificación por SQL y clic
+a clic) en `sessions/2026-08-07-ventas-optimizaciones.md`. Resumen:
+§3.1 corregida (consulta en dos oleadas, sin `select('*')` global); §3.2
+corregida (6 endpoints + `cotizaciones`/`notas-remision` paginados,
+contrato `{data,count,page,pageSize}`, 4 pantallas migradas a explorer);
+§3.3 corregida — el conteo real era **7** evaluaciones de
+`costo_promedio_global()` en el caso común (sin override), no 4 como
+reportaba este hallazgo; bajó a 1 con `cross join lateral`, verificado
+igual resultado en 7 escenarios comparativos; §3.4 corregida (selector de
+autorización vigente en vez de copiar/pegar UUID, confirmado clic a clic:
+solicitar como `ventas` → aprobar como `direccion` → aparece preseleccionada);
+§3.5 corregida (`ventas_vinculo_cancelar()`, 036 — nunca borra, recalcula
+PO/NR hacia atrás, bloqueada si ya hay consecuencia de facturación,
+confirmado clic a clic con recálculo real de `parcialmente_vinculada`/
+`parcialmente_respaldada`); §3.6 **sin cambio, documentado como pendiente**
+(ver `db/procesos/ciclo-de-venta.md` y el TODO de `CLAUDE.md` — no hay
+regla inequívoca en código/proceso para restringir por dueño).
+
 ### 3.1 (🟡) `/dashboard/ventas/ordenes-compra/[id]` trae `ventas_po_nr_vinculos` completa
 
 `app/app/dashboard/ventas/ordenes-compra/[id]/page.tsx:21`:
@@ -298,6 +337,11 @@ contrario.
 
 ## 6. Siguiente paso sugerido
 
+**Hallazgo #1 ya corregido** (§1, `035_apartados_pedido_linea.sql`,
+2026-08-07) — se dejó el texto original de esta sección tal cual (abajo)
+para que quede constancia de la prioridad con la que se planteó en su
+momento.
+
 Priorizar la corrección del hallazgo #1 (§1, confirmado dos veces — por
 SQL y por navegador con datos reales, §7.2) antes de que existan despachos
 reales con cotizaciones que repitan producto. El hallazgo #2 (crash de
@@ -305,8 +349,12 @@ reales con cotizaciones que repitan producto. El hallazgo #2 (crash de
 bloquear el resto de la verificación — `npx tsc --noEmit` ya confirmó sin
 errores nuevos; falta sólo incluirlo en el próximo `docker build
 --target builder` de cierre de jornada. El resto de los hallazgos de §3
-y §7.3–§7.7 son mejoras o defectos menores,
-no bloqueantes, y se pueden agendar con menor urgencia.
+y §7.3–§7.7 son mejoras o defectos menores, no bloqueantes.
+
+**Actualización 2026-08-07 (sesión de corrección de UX)** — §7.3, §7.4,
+§7.5 y §7.6 quedaron corregidos y verificados clic a clic (ver cada
+subsección). Único pendiente de §7: §3 (rendimiento/paginación, fuera del
+alcance de esa sesión). §7.7 no era un hallazgo, sólo una nota.
 
 ## 7. Verificación en vivo con navegador (Claude in Chrome)
 
@@ -391,7 +439,38 @@ Ver el bloque "Confirmación adicional con datos reales" al final de §1 —
 mismo resultado que la simulación por SQL, esta vez con `COT-000039` /
 `PED-000019` / `NR-000014` reales y sin `ROLLBACK`.
 
-### 7.3 (🟡) Patrón repetido: la UI no refresca tras una mutación exitosa
+### 7.3 (🟡→✅ corregido 2026-08-07) Patrón repetido: la UI no refresca tras una mutación exitosa
+
+**Corregido** en la sesión de UX del 2026-08-07 (`cotizacion-detalle.tsx`,
+`pedido-detalle.tsx`, `nr-detalle.tsx`, `po-detalle.tsx`,
+`cartera-comercial-tab.tsx`, `consultas-bandeja.tsx`,
+`autorizaciones-bandeja.tsx`, `inventario/ajustes/[id]/page.tsx`,
+`productos/[id]/producto-detalle.tsx`). Causa raíz doble: (1) las
+pantallas de detalle espejaban las props del Server Component en
+`useState(prop)` — `router.refresh()` re-renderiza con props frescas,
+pero un `useState` sólo lee su argumento en el primer render, así que el
+espejo nunca veía el dato nuevo; (2) el refetch de cliente que sí existía
+no se esperaba antes de reactivar el botón y tragaba sus propios errores
+en silencio. Se retiró el espejo (el Server Component pasa a ser la
+única fuente de verdad; el estado de cliente sólo guarda lo que el
+servidor no sabe — formularios, diálogos, resultados efímeros) y se
+centralizó el patrón en un hook nuevo, `app/lib/ui/use-accion-servidor.ts`
+(`ejecutar()` hace el `fetch` con `cache:'no-store'`, captura error de
+red/servidor, y dispara `startTransition(() => router.refresh())` en
+éxito). Verificado clic a clic con usuarios QA reales: agregar línea de
+cotización, enviar/aprobar cotización (`COT-000061`), liberar
+pedido/emitir NR (`PED-000041`), registrar seguimiento de NR
+(`NR-000014`), y el ciclo completo de un Ajuste nuevo
+(`AJU-000019`: agregar línea → enviar a autorización → autorizar →
+aplicar al kardex) — los cuatro cambios de estado se vieron en pantalla
+sin recargar, incluida la bandeja `/dashboard/inventario/ajustes` al
+volver a ella (confirma que también se invalidó el Router Cache de Next,
+no sólo la ruta activa).
+
+---
+
+*Texto original del hallazgo, conservado como registro de lo que se
+encontró:*
 
 En al menos **tres** puntos distintos del ciclo de Ventas, una acción que
 la API confirma con éxito (`2xx`, verificado por `read_network_requests`)
@@ -420,34 +499,63 @@ vuelve a pedir los datos). Vale una revisión enfocada de qué acciones
 mutantes del módulo llaman a `router.refresh()`/refetch después de un
 `res.ok` y cuáles no.
 
-### 7.4 (🟡) Varias pantallas muestran el UUID crudo del producto en vez de su nombre
+### 7.4 (🟡→✅ corregido 2026-08-07) Varias pantallas muestran el UUID crudo del producto en vez de su nombre
 
-Confirmado en al menos tres tablas: líneas de cotización
-(`cotizacion-detalle.tsx`), líneas de pedido (`pedido-detalle.tsx`) y
-líneas de NR (`remisiones/[id]/page.tsx` — heredado del mismo patrón).
-Cada fila muestra literalmente `670e2a3b-9fbb-47d6-8459-e08eb0d61e14` en
-vez de "QA-VEN Válvula de prueba auditoría" o su código interno
-`RTB-FER-000006`. El componente de ajustes de inventario, en cambio, sí
-resuelve el nombre del producto correctamente — es un patrón a copiar de
-ahí hacia las pantallas de Ventas.
+**Corregido.** Se añadió el embed de PostgREST
+`productos(codigo_interno, nombre)` en las consultas de servidor de
+`ventas/cotizaciones/[id]/page.tsx`, `ventas/pedidos/[id]/page.tsx` y
+`ventas/remisiones/[id]/page.tsx` (y en los `GET` equivalentes de la
+API), copiando el patrón ya funcional de
+`app/app/api/inventario/ajustes/[id]/route.ts`. Se creó un componente
+compartido, `app/components/inventario/producto-etiqueta.tsx`
+(`<ProductoEtiqueta>`), que pinta nombre sobre código interno y nunca el
+UUID como texto visible (fallback a "Producto no disponible" con el
+UUID sólo en `title=` para soporte); se usa en cotización (tabla y fila
+"en consulta"), pedido, NR (tabla y diálogo de despacho) y también se
+aplicó en Ajustes de inventario, que antes mostraba el nombre pero
+perdía el código interno. Verificado clic a clic: `COT-000061`,
+`PED-000041`, `NR-000014` (incluida la reproducción exacta del hallazgo
+#1 con las líneas de 5 y 3 piezas — ambas muestran "QA-VEN Válvula de
+prueba auditoría / RTB-FER-000006", ningún UUID) y `AJU-000019` muestran
+código + nombre en cada tabla.
 
-### 7.5 (🟡) Tarjeta "Ventas" del dashboard principal sigue etiquetada "Próximamente"
+### 7.5 (🟡→✅ corregido 2026-08-07) Tarjeta "Ventas" del dashboard principal sigue etiquetada "Próximamente"
 
-`/dashboard` (con la sesión real del dueño del proyecto, antes de
-cambiar a las cuentas QA): la tarjeta de "Módulos del Sistema" para
-Ventas conserva el badge "Próximamente" pese a que el módulo ya está
-activo y el enlace del sidebar ya lo desbloqueó — inconsistencia
-puramente visual/de contenido, no de permisos (el acceso real ya
-funciona), pero engañosa para cualquiera que sólo mire esa tarjeta.
+**Corregido.** `app/app/dashboard/page.tsx` mantenía su propio arreglo
+`MODULE_CARDS` con el badge "Próximamente" hardcodeado para las 6
+tarjetas, sin filtro por rol — una segunda lista, desincronizada de la
+real (`NAV_SECTIONS` en `app/lib/rbac/config.ts`, que el sidebar ya usa y
+donde Ventas dejó de tener `badge` desde que se activó el módulo). Se
+sustituyó por `getNavForRole(role)` filtrando la sección "Módulos"
+(constante `SECCION_MODULOS` exportada), con un mapa local sólo de
+presentación (color, descripción) indexado por `href`; sin `badge` la
+tarjeta ahora es un `<Link>` navegable, con `badge` sigue siendo un
+recuadro atenuado no interactivo — mismo criterio que ya aplica el
+sidebar. Verificado con `qa.almacen` y `qa.direccion`: Ventas aparece sin
+"Próximamente" y es clicable; los otros 5 módulos siguen marcados
+"Próximamente"; "Módulos disponibles" (antes un conteo fijo de 6) ahora
+muestra 1, coherente con lo que cada rol ve.
 
-### 7.6 (🟡) La tarjeta "Costo vigente" del producto no se refresca tras registrar un costo nuevo
+### 7.6 (🟡→✅ corregido 2026-08-07) La tarjeta "Costo vigente" del producto no se refresca tras registrar un costo nuevo
 
-`/dashboard/productos/[id]`, pestaña Costos: al guardar un costo de
-catálogo nuevo, la fila aparece correctamente en el histórico de la
-misma pestaña, pero la tarjeta superior "Costo vigente" se queda en "Sin
-costo" hasta recargar la página completa — mismo patrón que §7.3, en una
-pantalla de RTB-INV-01 (no de Ventas), encontrada de paso al preparar
-datos de prueba.
+**Corregido**, en dos piezas — arreglar sólo el refresco habría dejado al
+usuario viendo el mismo número sin explicación. (1) `CostosTab.
+registrarCosto` ahora espera el refetch del histórico, muestra
+`toast.success('Costo de catálogo registrado.')` y dispara
+`startTransition(() => router.refresh())`, que reevalúa la RPC
+`costo_unitario_vigente` (prop del Server Component) y con ella el KPI de
+cabecera. (2) Como `costo_unitario_vigente()`
+(`011_inventario_kardex.sql:690-708`) es una cascada que prioriza
+`inventario_existencias.costo_promedio` sobre `producto_costos`, un
+producto con existencias valuadas (como `RTB-FER-000006`, con stock real
+de `AJU-000018`) **legítimamente no cambia** su "Costo vigente" al
+registrar un costo de catálogo nuevo — se añadió una nota de fuente bajo
+el KPI ("Promedio de inventario" / "Catálogo o proveedor") y un aviso
+explicativo en la pestaña Costos cuando aplica, para que el usuario sepa
+que el registro sí se guardó y por qué el número no se movió. Verificado
+clic a clic con `qa.compras` en `RTB-FER-000006`: la nota "Promedio de
+inventario" aparece bajo "$100.00", y el aviso explicativo se muestra en
+la pestaña Costos antes de registrar el nuevo costo.
 
 ### 7.7 (🟢 nota, no es un bug) — El checkbox "sin soporte" de un Ajuste
 

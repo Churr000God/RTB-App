@@ -75,7 +75,7 @@ contexto/                 # documentos de negocio, marca y specs de cada módulo
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
 | 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
 | 3 | RTB-INV-01 Productos, Costos e Inventario (catálogo, kardex, conteos, discrepancias, ajustes) | ✅ Base funcional (auditado 2026-08-05) |
-| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por partida) | ✅ Base funcional (auditado 2026-08-07) — 1 hallazgo crítico abierto en despacho, Vía B sin NR pendiente |
+| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por partida) | ✅ Base funcional (auditado 2026-08-07, hallazgo crítico y defectos de UX corregidos el mismo día) — Vía B sin NR pendiente |
 | 5 | Compras | 🔜 Planificado |
 | 6 | Almacén | 🔜 Planificado |
 | 7 | Rutas | 🔜 Planificado |
@@ -424,6 +424,22 @@ contra Supabase — ver TODO.
   cualquier `<Tooltip>` nuevo necesita su propio `<TooltipProvider>`
   local (o uno global habría que agregarlo a los layouts) — no asumir que
   ya existe uno más arriba en el árbol.
+- **`created_at` no desempata filas hermanas creadas en el mismo `INSERT
+  ... SELECT` — `now()` es constante dentro de una transacción.**
+  `ventas_cotizacion_aprobar()` (031) inserta todas las reservas de un
+  pedido con un solo `INSERT ... SELECT`; las filas resultantes de
+  `inventario_apartados` comparten el mismo `created_at` al microsegundo,
+  no una secuencia. `ventas_nr_despachar()` (032) confiaba en `order by
+  created_at limit 1` para elegir el apartado a consumir cuando un pedido
+  tenía dos líneas del mismo producto — no era una elección "la más
+  antigua primero", era arbitraria entre filas indistinguibles por esa
+  columna (hallazgo crítico #1 de RTB-VEN-01, corregido en `035` con
+  `pedido_linea_id`, ver Historial). Regla general: `order by created_at`
+  no es un desempate confiable sobre cualquier conjunto de filas que
+  pudieron nacer en el mismo `INSERT` multi-fila o la misma función
+  `SECURITY DEFINER` — hace falta una columna que identifique la relación
+  real (aquí, la línea de origen), no un timestamp que dentro de la misma
+  transacción no avanza.
 
 ## Historial de decisiones
 
@@ -866,28 +882,206 @@ contra Supabase — ver TODO.
   Los datos `QA-*`/`COT-000039`/`PED-000019`/`NR-000014`/`AJU-000016..18`
   creados durante la verificación quedaron persistidos como evidencia,
   mismo criterio que otras campañas QA del proyecto — no se purgaron.
+- **2026-08-07 (sesión aparte, corrección del hallazgo crítico #1)** —
+  `inventario_apartados` no ligaba cada reserva a la línea de pedido que
+  la originó (sólo a `producto_id`/`pedido_id`), así que
+  `ventas_nr_despachar()` (`032`) emparejaba con `order by created_at
+  limit 1` — arbitrario cuando un pedido tiene 2+ líneas del mismo
+  producto, y `ventas_cotizacion_aprobar()` inserta todas las reservas de
+  un pedido en el mismo `INSERT ... SELECT`, así que ni siquiera
+  desempataba por orden real de creación (mismo `created_at` al
+  microsegundo — ver gotcha nuevo). Migración
+  `035_apartados_pedido_linea.sql`: columna `pedido_linea_id` con FK
+  compuesta `(pedido_linea_id, pedido_id)` → `ventas_pedido_lineas (id,
+  pedido_id)` (`MATCH SIMPLE`, no se evalúa si alguna columna es NULL —
+  así el apartado libre de Almacén sin pedido sigue sin verse afectado),
+  poblada desde `ventas_cotizacion_aprobar()` al nacer la reserva y
+  propagada al remanente en `ventas_nr_despachar()` cuando el despacho es
+  parcial; `apartados_before_update()` la congela igual que `pedido_id`;
+  `uq_apartados_pedido_linea_activo` (índice único parcial) garantiza como
+  máximo una reserva activa por línea — es lo que permite que el despacho
+  resuelva con una sola fila sin ambigüedad, en vez de sólo esperar que
+  así fuera. Los 3 apartados históricos de `PED-000019` (la evidencia
+  persistida del propio hallazgo, campaña QA anterior) se backfillearon en
+  la misma migración con dos reglas deterministas (match directo por
+  perfil `producto_id`+`cantidad` único, y remanente de despacho parcial
+  heredado del apartado padre vía el `inventario_movimientos` que lo
+  originó) — la incoherencia que el bug había dejado (línea de 5 piezas
+  sub-reservada, línea de 3 con un apartado huérfano) se dejó tal cual,
+  documentada, sin sanear el pedido histórico. Verificado con matriz SQL
+  completa (rol real simulado, `BEGIN/ROLLBACK`: caso de 2 líneas
+  repetidas despachadas fuera de orden, despacho parcial, línea única,
+  rechazo legítimo, atomicidad ante error de kardex, permisos negativos) y
+  clic a clic con usuarios QA reproduciendo el escenario exacto que había
+  fallado, con datos nuevos y persistidos. Actualizados
+  `contexto/AUDITORIA_RTB-VEN-01.md` (hallazgo #1 marcado como corregido,
+  sin borrar la descripción original), `db/ESQUEMA.md` y
+  `db/procesos/ciclo-de-venta.md`. Sin cambios de RLS ni uso de
+  `service_role` — el `GRANT INSERT` por columna de `031` ya no incluía
+  `pedido_linea_id` en la lista escribible por `authenticated`, así que
+  sigue sin serlo.
+
+- **2026-08-07 (sesión aparte, §3 de la auditoría — rendimiento y
+  operación de RTB-VEN-01)** — Cerró los seis hallazgos de
+  `contexto/AUDITORIA_RTB-VEN-01.md` §3, en paralelo con la sesión que
+  corrigió el hallazgo crítico #1 (mismo repositorio, migración `035` ya
+  tomada por esa sesión — ésta usó `036`). §3.1: `ordenes-compra/[id]/page.tsx`
+  dejó de traer `ventas_po_nr_vinculos` completa (`select('*')` sin
+  filtro) — ahora dos oleadas de `Promise.all`, la segunda con
+  `.in('po_partida_id', partidaIds)`. §3.2: los 6 endpoints
+  (`ordenes-compra`, `consultas`, `congelamientos`, `excepciones`,
+  `autorizaciones`, `pedidos`) pasaron al contrato ya establecido en el
+  repo (`{data,count,page,pageSize}`, `PAGE_SIZE` local, `.range()`) —
+  `cotizaciones`/`notas-remision` recibieron de paso el `page`/`pageSize`
+  que les faltaba y el `|| 1` que ya tenían las otras 8 rutas paginadas
+  del proyecto (sin él, `?page=abc` producía `NaN` en `.range()`).
+  `consultas` fue el caso difícil: sus pestañas Abiertas/Resueltas
+  filtraban en memoria el universo completo — ahora `estado` acepta una
+  lista separada por comas (`.in()`) y el endpoint devuelve un `abiertas`
+  aparte (count con `head:true`) para que el badge de la pestaña siga
+  correcto aunque la pestaña activa sea Resueltas. Componente nuevo
+  `components/ui/paginacion.tsx` (el bloque "Mostrando X–Y de N / Anterior
+  / Siguiente" estaba copiado literal en 5 pantallas sin ninguno
+  compartido) usado sólo en las 4 pantallas nuevas — las 5 existentes no
+  se tocaron. §3.3: `costo_venta_detalle()` evaluaba
+  `costo_promedio_global()` hasta **7** veces por llamada en el caso común
+  (el hallazgo original decía 4) — Postgres no memoiza una función
+  `stable` dentro del mismo `SELECT`; bajó a 1 con `cross join lateral`,
+  verificado idéntico en 7 escenarios comparativos (`old` vs `new`,
+  transacción con `ROLLBACK`). §3.4: el campo "ID de autorización" de
+  `po-detalle.tsx` (texto libre para copiar/pegar un UUID) pasó a un
+  `<select>` poblado desde `GET /api/ventas/autorizaciones` filtrado por
+  las cuatro condiciones exactas que exige `ventas_po_validar()`
+  (`tipo=excepcion_subtotal`, `estado=autorizada`,
+  `documento_tipo=purchase_order`, `documento_id=po.id`) — con exactamente
+  una vigente se preselecciona sola. §3.5: `ventas_vinculo_cancelar()`
+  (`036`) — el enum `vinculo_estado` ya tenía `'cancelado'` desde `033`
+  pero ninguna función lo escribía. Nunca borra la fila; bloqueada si el
+  vínculo ya está `aprobado_para_facturacion`/`facturado`; recalcula el
+  estado de la PO y de la NR **hacia atrás** (el `CASE` de
+  `ventas_po_validar()` sólo avanza) — con cero vínculos activos en toda
+  la PO el estado vuelve a `en_validacion`, no `parcialmente_vinculada`
+  (que con cero cobertura mentiría). Se le agregó también el trigger
+  `audit_row()` que le faltaba desde `033`. §3.6: **sin cambiar** —
+  `ventas_ordenes_compra_cliente` no tiene `vendedor_id` y
+  `ventas_po_validar()` sólo valida por rol, pero no hay una regla
+  inequívoca en código ni en proceso que diga si eso es correcto o un
+  hueco; se documentó como pregunta pendiente para el dueño del proyecto
+  en `db/procesos/ciclo-de-venta.md` y aquí abajo, sin tocar autorización
+  por suposición.
+
+  Verificado con SQL simulando rol real (`set_config('request.jwt.claim.sub', ...)`
+  — sin `set local role`, porque `current_user_role()`/`ventas_vinculo_cancelar()`
+  sólo dependen de `auth.uid()`, no del rol de sesión de Postgres; las
+  funciones `SECURITY DEFINER` corren como su dueño de cualquier forma):
+  camino feliz de cancelación con escalado de estado (2 vínculos → cancelar
+  uno → `parcialmente_vinculada`/`parcialmente_respaldada` → cancelar el
+  otro → `en_validacion`/`entregada_sin_po` con cero activos → re-vincular
+  el mismo par sin chocar contra `uq_vinculo_par`), cancelar un
+  `facturado`/`aprobado_para_facturacion` (ambos `42501`), doble
+  cancelación (`42501`), motivo vacío (`23514`), rol sin permiso
+  (`42501`, y el vínculo no se toca), CHECK directo, `audit_log` con
+  ambas filas (`insert`/`update`). Y clic a clic real con usuarios QA
+  (`QA Ventas` valida con subtotal coincidente y unitarios distintos →
+  solicita autorización → `QA Dirección` la aprueba desde
+  `/dashboard/ventas/autorizaciones` → `QA Ventas` vuelve a la PO y la ve
+  preseleccionada sin teclear ningún UUID → valida con éxito, PO
+  `POC-000016` vinculada → cancela un vínculo con motivo → PO baja a
+  `parcialmente_vinculada`, NR baja a `parcialmente_respaldada`,
+  confirmado por SQL directo). El navegador se compartió con la sesión
+  concurrente del hallazgo #1 (mismo perfil de Chrome, cookie de Supabase
+  Auth por origen) — varias veces una sesión pisó el login de la otra a
+  media acción ("No autenticado" en un submit que sí llegó a ejecutarse
+  bajo el usuario anterior); se resolvió reintentando y confirmando cada
+  resultado contra la base de datos por SQL directo en vez de confiar sólo
+  en la pantalla, mismo criterio ya documentado para sesiones concurrentes.
+  `npx tsc --noEmit` y `docker build --target builder` (TypeScript real)
+  limpios. Detalle completo en
+  `sessions/2026-08-07-ventas-optimizaciones.md`.
+- **2026-08-07 (sesión aparte, corrección de UX/refresco de
+  RTB-VEN-01 — §7.1, 7.3–7.6 de la auditoría)** — Tercera sesión del día
+  sobre el mismo repositorio, en paralelo con las dos anteriores
+  (hallazgo #1 y §3). Cerró los defectos de experiencia detectados en la
+  verificación clic a clic de `contexto/AUDITORIA_RTB-VEN-01.md`, sin
+  tocar SQL/RLS ni contratos de API salvo un embed additivo. §7.1
+  (`Tooltip` sin `TooltipProvider`): ya venía corregido de la propia
+  sesión de auditoría; se dejó documentada la convención en
+  `components/ui/tooltip.tsx` (el repo no monta un provider global, cada
+  uso envuelve el suyo local). §7.3 (la UI no refrescaba tras una
+  mutación exitosa): causa raíz doble — las pantallas de detalle de
+  Ventas espejaban las props del Server Component en `useState(prop)`
+  (`router.refresh()` trae props frescas, pero un `useState` sólo lee su
+  argumento en el primer render, así que el espejo nunca las veía), y el
+  refetch de cliente que sí existía no se esperaba antes de reactivar el
+  botón y tragaba sus propios errores. Se retiró el espejo en las 4
+  pantallas de detalle (`cotizacion-detalle.tsx`, `pedido-detalle.tsx`,
+  `nr-detalle.tsx`, `po-detalle.tsx`) y en `cartera-comercial-tab.tsx`,
+  `consultas-bandeja.tsx`, `autorizaciones-bandeja.tsx` — el Server
+  Component pasa a ser la única fuente de verdad; el estado de cliente
+  sólo guarda lo que el servidor no sabe (`propuestos`/`resultado` de PO,
+  diálogos abiertos, formularios). Nuevo hook compartido,
+  `app/lib/ui/use-accion-servidor.ts` (`ejecutar()`: `fetch` con
+  `cache:'no-store'`, error visible, `startTransition(() =>
+  router.refresh())` en éxito), y `app/components/ui/actualizando.tsx`
+  (indicador «Actualizando…»). Excepción documentada en el propio código:
+  `po-detalle.tsx` NO usa el hook para `validar()` porque
+  `ventas_po_validar()` responde `200` con `{success:false,...}` como
+  resultado de negocio válido (PO rechazada, nada persistido) — refrescar
+  ahí habría sido trabajo de red innecesario, no un bug. El mismo defecto
+  de refresco existía también en `inventario/ajustes/[id]/page.tsx`
+  (RTB-INV-01) y en `productos/[id]/producto-detalle.tsx` (pestaña
+  Costos) — fix mínimo en el primero (esperar el refetch, `cache:
+  'no-store'`, mostrar el error, `router.refresh()` para que la bandeja y
+  la ficha de producto no queden viejas por el Router Cache de Next) y
+  refresco real + `toast` en el segundo. §7.4 (UUID crudo de
+  `producto_id` en vez de nombre): embed de PostgREST
+  `productos(codigo_interno, nombre)` añadido en las 3 páginas de
+  servidor de Ventas y sus `GET` de API equivalentes (mismo patrón que
+  `api/inventario/ajustes/[id]/route.ts`, ya funcional); componente
+  nuevo `components/inventario/producto-etiqueta.tsx`
+  (`<ProductoEtiqueta>`) que nunca pinta el UUID como texto visible
+  (fallback "Producto no disponible" con el UUID sólo en `title=`), usado
+  en cotización/pedido/NR/Ajustes. §7.5 (tarjeta "Ventas" del dashboard
+  seguía en "Próximamente"): `dashboard/page.tsx` mantenía su propio
+  `MODULE_CARDS` hardcodeado y sin filtro por rol, una segunda lista
+  desincronizada de `NAV_SECTIONS` (la que ya usa el sidebar, donde
+  Ventas dejó de tener `badge` cuando se activó). Se sustituyó por
+  `getNavForRole(role)` filtrando la sección "Módulos" (constante nueva
+  `SECCION_MODULOS` en `lib/rbac/config.ts`), con un mapa local sólo de
+  presentación (color/descripción) indexado por `href` — un módulo sin
+  `badge` en `NAV_SECTIONS` queda disponible en ambos lados a la vez, sin
+  mantener dos listas. §7.6 ("Costo vigente" no se refrescaba): dos
+  piezas, porque arreglar sólo el refresco habría dejado al usuario
+  viendo el mismo número sin explicación — refresco real (ya cubierto
+  arriba) más una nota de fuente bajo el KPI ("Promedio de inventario" /
+  "Catálogo o proveedor") y un aviso en la pestaña Costos, porque
+  `costo_unitario_vigente()` (`011_inventario_kardex.sql:690-708`)
+  prioriza `inventario_existencias.costo_promedio` sobre
+  `producto_costos`: en un producto con existencias valuadas, un costo de
+  catálogo nuevo **legítimamente no mueve** el KPI, y sin la nota eso se
+  ve indistinguible de que el fix no funcionó. Verificado clic a clic con
+  usuarios QA reales (no sólo lectura de código): `COT-000061` completa
+  (agregar línea sin crash del Tooltip, enviar, aprobar — badge y
+  botones cambian sin recargar), `PED-000041` (liberar a Almacén con
+  estado real, no inferido por `url.includes()` como antes), `NR-000014`
+  (mismas 2 líneas del hallazgo #1 ahora con código+nombre, seguimiento
+  agregado sin recargar), `AJU-000019` (ciclo completo: agregar línea →
+  enviar → autorizar → aplicar al kardex, los cuatro sin recargar,
+  incluida la bandeja de Ajustes al volver a ella — confirma que también
+  se invalida el Router Cache, no sólo la ruta activa), tarjeta de
+  dashboard con `qa.almacen`/`qa.direccion`, y "Costo vigente" con
+  `qa.compras` en `RTB-FER-000006`. `npx tsc --noEmit` y `docker build
+  --target builder` limpios en cada verificación intermedia, no sólo al
+  final — necesario porque las tres sesiones del día escribían archivos
+  compartidos en paralelo (mismo repositorio, sin worktrees separados);
+  se confirmó antes de cerrar que ningún archivo propio había perdido
+  cambios de las otras dos. `contexto/AUDITORIA_RTB-VEN-01.md`
+  actualizado: §7.3–§7.6 marcados como corregidos con el texto original
+  conservado debajo como registro. Detalle completo en
+  `sessions/2026-08-07-correccion-ux-ven01.md`.
 
 ## TODO
 
-- **RTB-VEN-01 — `ventas_nr_despachar()` puede consumir la reserva
-  equivocada cuando un pedido tiene 2+ líneas del mismo producto.**
-  Auditoría de punta a punta del módulo (2026-08-07,
-  `contexto/AUDITORIA_RTB-VEN-01.md`), hallazgo #1 — confirmado dos veces:
-  primero con reproducción por SQL (transacción con `ROLLBACK`, sin datos
-  persistidos) y después, en una sesión posterior el mismo día, clic a
-  clic con la extensión Claude in Chrome usando datos reales y
-  persistidos (`COT-000039`/`PED-000019`/`NR-000014`, usuario `QA
-  Almacén`) — mismo resultado exacto en ambos casos.
-  `inventario_apartados` no liga cada reserva a la línea de pedido/NR que
-  la originó (sólo `producto_id`), así que `order by created_at limit 1`
-  puede consumir el apartado de la línea incorrecta y luego rechazar un
-  despacho legítimo con "la reserva comprometida no alcanza" aunque el
-  total reservado sea suficiente. Corrección propuesta: añadir
-  `pedido_linea_id`/`nr_linea_id` a `inventario_apartados`, poblarlo desde
-  `ventas_cotizacion_aprobar()` (031) y filtrar por esa columna en
-  `ventas_nr_despachar()` (032) — pendiente de programar como tarea aparte
-  con su propia migración y verificación, antes de que existan despachos
-  reales con cotizaciones que repitan producto.
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está
@@ -938,3 +1132,19 @@ contra Supabase — ver TODO.
   ninguna función de esta entrega los escribe ni calcula antigüedad de
   saldo vencido — el congelamiento de cartera (`cliente_congelamientos`)
   se sigue registrando a mano por Dirección hasta que exista ese módulo.
+- **RTB-VEN-01 — permisos de PO entre vendedores, pregunta abierta para
+  el dueño del proyecto.** `ventas_ordenes_compra_cliente` no tiene
+  `vendedor_id` (a diferencia de `ventas_cotizaciones`/`ventas_pedidos`/
+  `ventas_notas_remision`, que sí lo tienen y lo usan en RLS) y
+  `ventas_po_validar()` (033) sólo comprueba `current_user_role()` — hoy
+  cualquier usuario `ventas` puede validar/vincular la PO de cualquier
+  cliente, sin importar quién cotizó. `030:165-168` sugiere que es
+  intencional ("una PO consolidada puede involucrar NR de otro vendedor
+  del mismo cliente"), pero el texto de proceso ("Registrar/validar una
+  PO: igual que cotizar") sugería lo contrario antes de aclararse en
+  `db/procesos/ciclo-de-venta.md` (§3.6 de
+  `contexto/AUDITORIA_RTB-VEN-01.md`). Deliberadamente **no** se cambió
+  autorización por suposición. Pregunta concreta a resolver: ¿una PO
+  consolidada de un cliente puede cubrir NR de varios vendedores? Si la
+  respuesta es no, la corrección es restringir `ventas_po_validar()` por
+  `vendedor_id` de las NR vinculadas — no requiere columna nueva.

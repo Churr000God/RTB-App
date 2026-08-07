@@ -6,8 +6,14 @@ import { requireApiRole } from '@/lib/supabase/guards';
 import { ventasAutorizacionCreateSchema } from '@/lib/ventas/schemas';
 import { rolesQuePueden } from '@/lib/ventas/permisos';
 
+const PAGE_SIZE = 20;
+
 // GET - bandeja de autorizaciones (excepción de subtotal, código
-// divergente, duplicidad confirmada, corrección de documento).
+// divergente, duplicidad confirmada, corrección de documento). Paginada
+// (mismo patrón que /api/inventario/hallazgos y /api/entidades).
+// documento_tipo/documento_id/tipo son aditivos — los usa po-detalle.tsx
+// para ofrecer sólo la autorización vigente de ESTA PO en vez de que el
+// usuario pegue el UUID a mano (§3.4 de AUDITORIA_RTB-VEN-01.md).
 export async function GET(request: Request) {
   try {
     const { response } = await requireApiRole();
@@ -15,15 +21,28 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const estado = searchParams.get('estado');
+    const tipo = searchParams.get('tipo');
+    const documentoTipo = searchParams.get('documento_tipo');
+    const documentoId = searchParams.get('documento_id');
+    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+    const from = (page - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
 
     const supabase = createSupabaseServerClient();
-    let query = supabase.from('ventas_autorizaciones').select('*').order('created_at', { ascending: false });
+    let query = supabase
+      .from('ventas_autorizaciones')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
     if (estado) query = query.eq('estado', estado);
+    if (tipo) query = query.eq('tipo', tipo);
+    if (documentoTipo) query = query.eq('documento_tipo', documentoTipo);
+    if (documentoId) query = query.eq('documento_id', documentoId);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ data: data ?? [] });
+    return NextResponse.json({ data: data ?? [], count: count ?? 0, page, pageSize: PAGE_SIZE });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

@@ -1,15 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { ProductoCombobox } from '@/components/inventario/producto-combobox';
+import { MotivoDialog } from '@/components/inventario/motivo-dialog';
 import { POEstadoBadge, VinculoEstadoBadge } from '@/components/ventas/estado-badge';
+import { Actualizando } from '@/components/ui/actualizando';
+import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
 import { rfcCoincide } from '@/lib/ventas/validaciones';
-import { ArrowLeft, AlertCircle, CheckCircle2, Loader2, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, AlertCircle, CheckCircle2, Loader2, Plus, Trash2, Ban } from 'lucide-react';
+
+// Estados de vinculo_estado que ya tienen consecuencia de facturación —
+// ventas_vinculo_cancelar() (036) los rechaza con 42501; no se ofrece el
+// botón para no invitar a un intento que sabemos que fallará.
+const VINCULO_NO_CANCELABLE = ['aprobado_para_facturacion', 'facturado', 'cancelado'];
 
 interface Props {
   po: any;
@@ -24,34 +32,66 @@ interface VinculoPropuesto {
   cantidad_cubierta: number;
 }
 
-export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos: vinculosIniciales, nrLineas }: Props) {
+// po/partidas/vinculos llegan como props del Server Component. propuestos
+// (vínculos aún no enviados) y resultado (veredicto de la última
+// validación) NO vienen del servidor — sobreviven al router.refresh() sin
+// necesidad de espejo, porque refresh() no desmonta componentes cliente.
+export function PoDetalle({ po, partidas, vinculos, nrLineas }: Props) {
   const router = useRouter();
-  const [po, setPo] = useState(poInicial);
-  const [partidas, setPartidas] = useState(partidasIniciales);
-  const [vinculos, setVinculos] = useState(vinculosIniciales);
+  const [refrescando, iniciarRefresco] = useTransition();
   const [propuestos, setPropuestos] = useState<VinculoPropuesto[]>([]);
   const [resultado, setResultado] = useState<any>(null);
   const [aceptarCodigo, setAceptarCodigo] = useState(false);
   const [autorizacionId, setAutorizacionId] = useState('');
+  const [autorizadas, setAutorizadas] = useState<any[]>([]);
+  const [pendientes, setPendientes] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const rfcSospechoso = !rfcCoincide(po.rfc_declarado, po.entidades?.rfc);
 
-  const recargar = async () => {
-    const res = await fetch(`/api/ventas/ordenes-compra/${po.id}`);
-    const data = await res.json().catch(() => null);
-    if (data?.data) {
-      const { partidas: p, vinculos: v, ...cabecera } = data.data;
-      setPo((prev: any) => ({ ...prev, ...cabecera }));
-      setPartidas(p ?? []);
-      setVinculos(v ?? []);
-    }
+  // Autorizaciones de subtotal ya vigentes para ESTA PO — así el usuario
+  // elige de una lista en vez de copiar/pegar el UUID a mano (§3.4 de
+  // AUDITORIA_RTB-VEN-01.md). ventas_po_validar() (033:501-505) sólo acepta
+  // exactamente estas cuatro condiciones (tipo/estado/documento_tipo/
+  // documento_id); el filtro aquí las replica para no ofrecer nunca una
+  // opción que el SQL fuera a rechazar.
+  const cargarAutorizaciones = async () => {
+    const params = new URLSearchParams({
+      documento_tipo: 'purchase_order',
+      documento_id: po.id,
+      tipo: 'excepcion_subtotal',
+    });
+    const [resAut, resPend] = await Promise.all([
+      fetch(`/api/ventas/autorizaciones?${params.toString()}&estado=autorizada`, { cache: 'no-store' }),
+      fetch(`/api/ventas/autorizaciones?${params.toString()}&estado=pendiente`, { cache: 'no-store' }),
+    ]);
+    const [dataAut, dataPend] = await Promise.all([
+      resAut.json().catch(() => ({})),
+      resPend.json().catch(() => ({})),
+    ]);
+    const lista = resAut.ok ? (dataAut?.data ?? []) : [];
+    setAutorizadas(lista);
+    setPendientes(resPend.ok ? (dataPend?.data ?? []) : []);
+    // Con exactamente una vigente, se preselecciona sola — sigue siendo el
+    // usuario quien pulsa "Validar y vincular"; nada se aplica solo.
+    if (lista.length === 1) setAutorizacionId(lista[0].id);
   };
+
+  useEffect(() => {
+    cargarAutorizaciones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [po.id]);
 
   const agregarVinculo = (v: VinculoPropuesto) => setPropuestos((prev) => [...prev, v]);
   const quitarVinculo = (i: number) => setPropuestos((prev) => prev.filter((_, idx) => idx !== i));
 
+  // ventas_po_validar() responde 200 con {success:false, motivo, mensaje}
+  // como resultado de negocio válido (PO bloqueada/rechazada) — no es un
+  // error HTTP y no persiste nada, así que sólo refrescamos cuando
+  // success===true (a diferencia del resto del módulo, aquí res.ok !=
+  // "algo cambió"; por eso esta pantalla no usa useAccionServidor para
+  // validar()).
   const validar = async () => {
     if (propuestos.length === 0) {
       setError('Agrega al menos un vínculo PO↔NR antes de validar.');
@@ -63,6 +103,7 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
     const res = await fetch(`/api/ventas/ordenes-compra/${po.id}/validar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify({
         vinculos: propuestos,
         autorizacion_id: autorizacionId || undefined,
@@ -78,8 +119,7 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
     setResultado(data);
     if (data.success) {
       setPropuestos([]);
-      await recargar();
-      router.refresh();
+      iniciarRefresco(() => router.refresh());
     }
   };
 
@@ -87,12 +127,16 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
     const res = await fetch('/api/ventas/autorizaciones', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify({ tipo, documento_tipo: 'purchase_order', documento_id: po.id, motivo }),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      setResultado((r: any) => ({ ...r, autorizacionSolicitada: data.data.id }));
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo solicitar la autorización.');
+      return;
     }
+    setResultado((r: any) => ({ ...r, autorizacionSolicitada: data?.data?.id }));
+    await cargarAutorizaciones();
   };
 
   return (
@@ -108,6 +152,7 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
           <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-3">
             {po.folio}
             <POEstadoBadge estado={po.estado} />
+            <Actualizando activo={refrescando} />
           </h1>
           <p className="text-muted-foreground mt-1">
             PO #{po.numero_po} · {po.entidades?.nombre_comercial ?? po.entidades?.nombre_legal} · {po.moneda}
@@ -152,11 +197,11 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
               )}
               {resultado.autorizacionSolicitada && (
                 <p className="mt-2 text-xs">
-                  Solicitud enviada (id {resultado.autorizacionSolicitada}). Una vez autorizada en{' '}
+                  Solicitud enviada. Una vez que{' '}
                   <Link href="/dashboard/ventas/autorizaciones" className="underline">
-                    Autorizaciones
+                    Dirección la autorice
                   </Link>
-                  , pega el id abajo y vuelve a validar.
+                  , aparecerá sola en "Autorización de subtotal" abajo — no hace falta copiar ningún id.
                 </p>
               )}
             </>
@@ -164,7 +209,7 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
         </div>
       )}
 
-      <PartidasCard poId={po.id} partidas={partidas} vinculos={vinculos} onAgregada={recargar} />
+      <PartidasCard poId={po.id} partidas={partidas} vinculos={vinculos} />
 
       {partidas.length > 0 && nrLineas.length > 0 && po.estado !== 'vinculada' && (
         <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
@@ -198,12 +243,27 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
             </label>
           </div>
           <div>
-            <Label className="text-xs">ID de autorización ya aprobada (opcional)</Label>
-            <input
+            <Label className="text-xs">Autorización de subtotal (opcional, sólo si los unitarios varían)</Label>
+            <select
               value={autorizacionId}
               onChange={(e) => setAutorizacionId(e.target.value)}
               className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
-            />
+            >
+              <option value="">Ninguna</option>
+              {autorizadas.map((a) => (
+                <option key={a.id} value={a.id}>
+                  Autorizada {new Date(a.autorizado_at ?? a.created_at).toLocaleDateString('es-MX')} — {a.motivo}
+                </option>
+              ))}
+            </select>
+            {pendientes.length > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {pendientes.length === 1
+                  ? 'Hay 1 solicitud pendiente de Dirección para esta PO.'
+                  : `Hay ${pendientes.length} solicitudes pendientes de Dirección para esta PO.`}{' '}
+                Aparecerá aquí en cuanto la autoricen.
+              </p>
+            )}
           </div>
           <Button onClick={validar} disabled={loading} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
             {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
@@ -215,25 +275,27 @@ export function PoDetalle({ po: poInicial, partidas: partidasIniciales, vinculos
   );
 }
 
-function PartidasCard({ poId, partidas, vinculos, onAgregada }: { poId: string; partidas: any[]; vinculos: any[]; onAgregada: () => Promise<void> }) {
+function PartidasCard({ poId, partidas, vinculos }: { poId: string; partidas: any[]; vinculos: any[] }) {
+  const { ejecutar, ocupado, error } = useAccionServidor();
   const [agregando, setAgregando] = useState(false);
-  const [lineaNumero, setLineaNumero] = useState(String(partidas.length + 1));
+  // Se deriva de `partidas` (prop del servidor) en cada render en vez de
+  // congelarse en el useState inicial — con el patrón anterior
+  // (partidas.length + 2 tras cada alta) el número propuesto se
+  // desincronizaba a partir de la segunda partida.
+  const siguienteNumero = partidas.length > 0 ? Math.max(...partidas.map((p) => Number(p.linea_numero))) + 1 : 1;
+  const [lineaNumero, setLineaNumero] = useState<string | null>(null);
   const [codigoCliente, setCodigoCliente] = useState('');
   const [descripcion, setDescripcion] = useState('');
   const [cantidad, setCantidad] = useState('1');
   const [precioUnitario, setPrecioUnitario] = useState('');
   const [productoId, setProductoId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [enviando, setEnviando] = useState(false);
 
   const agregar = async () => {
-    setError(null);
-    setEnviando(true);
-    const res = await fetch(`/api/ventas/ordenes-compra/${poId}/partidas`, {
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/partidas`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        linea_numero: Number(lineaNumero),
+        linea_numero: Number(lineaNumero ?? siguienteNumero),
         codigo_cliente: codigoCliente || undefined,
         descripcion: descripcion || undefined,
         cantidad: Number(cantidad),
@@ -241,20 +303,27 @@ function PartidasCard({ poId, partidas, vinculos, onAgregada }: { poId: string; 
         producto_id: productoId ?? undefined,
       }),
     });
-    const data = await res.json().catch(() => ({}));
-    setEnviando(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo agregar la partida.');
-      return;
-    }
+    if (!res.ok) return;
     setAgregando(false);
-    setLineaNumero(String(partidas.length + 2));
+    setLineaNumero(null);
     setCodigoCliente('');
     setDescripcion('');
     setCantidad('1');
     setPrecioUnitario('');
     setProductoId(null);
-    await onAgregada();
+  };
+
+  // Deshace un vínculo capturado por error (ventas_vinculo_cancelar(), 036)
+  // — nunca borra la fila, sólo la marca 'cancelado'. Reusa el mismo
+  // `ejecutar` de arriba: refresca el árbol de Server Components solo, sin
+  // necesidad de un callback aparte hacia el padre.
+  const cancelarVinculo = (vinculoId: string) => async (motivo: string) => {
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/vinculos/${vinculoId}/cancelar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo }),
+    });
+    return res.ok;
   };
 
   return (
@@ -267,6 +336,8 @@ function PartidasCard({ poId, partidas, vinculos, onAgregada }: { poId: string; 
           </Button>
         )}
       </div>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
 
       <table className="w-full text-sm">
         <thead>
@@ -291,12 +362,36 @@ function PartidasCard({ poId, partidas, vinculos, onAgregada }: { poId: string; 
               <td className="py-2 text-right tabular-nums">{formatearMoneda(p.precio_unitario)}</td>
               <td className="py-2 text-right tabular-nums">{formatearMoneda(p.subtotal)}</td>
               <td className="py-2">
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-col gap-1">
                   {vinculos
                     .filter((v) => v.po_partida_id === p.id)
                     .map((v) => (
-                      <VinculoEstadoBadge key={v.id} estado={v.estado} />
+                      <div key={v.id} className="flex items-center gap-1.5">
+                        <VinculoEstadoBadge estado={v.estado} />
+                        <span className="text-[10px] text-muted-foreground tabular-nums">×{v.cantidad_cubierta}</span>
+                        {!VINCULO_NO_CANCELABLE.includes(v.estado) && (
+                          <MotivoDialog
+                            trigger={
+                              <button
+                                type="button"
+                                className="text-muted-foreground hover:text-destructive"
+                                title="Cancelar vínculo"
+                              >
+                                <Ban className="w-3 h-3" />
+                              </button>
+                            }
+                            titulo="Cancelar vínculo PO↔NR"
+                            descripcion="La fila no se borra: queda marcada como cancelada, con quién y por qué. Puedes volver a vincular el mismo par después."
+                            confirmLabel="Cancelar vínculo"
+                            destructivo
+                            onConfirm={cancelarVinculo(v.id)}
+                          />
+                        )}
+                      </div>
                     ))}
+                  {vinculos.filter((v) => v.po_partida_id === p.id).length === 0 && (
+                    <span className="text-[10px] text-muted-foreground">—</span>
+                  )}
                 </div>
               </td>
             </tr>
@@ -313,13 +408,12 @@ function PartidasCard({ poId, partidas, vinculos, onAgregada }: { poId: string; 
 
       {agregando && (
         <div className="p-3 bg-rtb-surface/60 rounded-lg space-y-3">
-          {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Línea #</Label>
               <input
                 type="number"
-                value={lineaNumero}
+                value={lineaNumero ?? String(siguienteNumero)}
                 onChange={(e) => setLineaNumero(e.target.value)}
                 className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
               />
@@ -369,8 +463,8 @@ function PartidasCard({ poId, partidas, vinculos, onAgregada }: { poId: string; 
               <ProductoCombobox value={productoId} onChange={(id) => setProductoId(id)} />
             </div>
           </div>
-          <Button size="sm" onClick={agregar} disabled={enviando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-            {enviando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+          <Button size="sm" onClick={agregar} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            {ocupado && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
             Guardar partida
           </Button>
         </div>

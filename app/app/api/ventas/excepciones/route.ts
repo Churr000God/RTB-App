@@ -6,7 +6,9 @@ import { requireApiRole } from '@/lib/supabase/guards';
 import { excepcionCreateSchema } from '@/lib/ventas/schemas';
 import { rolesQuePueden } from '@/lib/ventas/permisos';
 
-// GET - excepciones de cartera (pendientes/autorizadas/rechazadas).
+const PAGE_SIZE = 20;
+
+// GET - excepciones de cartera (pendientes/autorizadas/rechazadas), paginado.
 export async function GET(request: Request) {
   try {
     const { response } = await requireApiRole();
@@ -15,16 +17,23 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const entidadId = searchParams.get('entidad_id');
     const estado = searchParams.get('estado');
+    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+    const from = (page - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
 
     const supabase = createSupabaseServerClient();
-    let query = supabase.from('cliente_excepciones').select('*').order('created_at', { ascending: false });
+    let query = supabase
+      .from('cliente_excepciones')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
     if (entidadId) query = query.eq('entidad_id', entidadId);
     if (estado) query = query.eq('estado', estado);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ data: data ?? [] });
+    return NextResponse.json({ data: data ?? [], count: count ?? 0, page, pageSize: PAGE_SIZE });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

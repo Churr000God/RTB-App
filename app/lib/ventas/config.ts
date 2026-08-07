@@ -2,20 +2,21 @@
 // app/lib/entidades/config.ts y app/lib/inventario/config.ts. Cada
 // constante es un espejo declarado de algo que vive en SQL; si diverge,
 // manda SQL (db/migrations/028…034).
-import type {
-  ClienteCarteraEstado,
-  ClienteTipo,
-  ConsultaEstado,
-  ConsultaUrgencia,
-  DatoFaltante,
-  NrEstado,
-  PedidoEstado,
-  PoEstado,
-  PrecioOrigenVenta,
-  VentasAutorizacionEstado,
-  VentasAutorizacionTipo,
-  VentasCotizacionEstado,
-  VinculoEstado,
+import {
+  CONSULTA_ESTADOS,
+  type ClienteCarteraEstado,
+  type ClienteTipo,
+  type ConsultaEstado,
+  type ConsultaUrgencia,
+  type DatoFaltante,
+  type NrEstado,
+  type PedidoEstado,
+  type PoEstado,
+  type PrecioOrigenVenta,
+  type VentasAutorizacionEstado,
+  type VentasAutorizacionTipo,
+  type VentasCotizacionEstado,
+  type VinculoEstado,
 } from '@/types/ventas';
 
 export type Tono = 'activo' | 'bloqueado' | 'pendiente' | 'inactivo';
@@ -59,6 +60,16 @@ export const CONSULTA_ESTADO_TONO: Record<ConsultaEstado, Tono> = {
   sin_disponibilidad: 'bloqueado',
   cancelada: 'inactivo',
 };
+
+// Partición de la bandeja de Compras-ligero (consultas-bandeja.tsx) en
+// pestañas Abiertas/Resueltas. Única definición — antes vivía como
+// predicado duplicado en el cliente (`c.estado === 'abierta' || ...`);
+// ahora también la usa GET /api/ventas/consultas para paginar cada
+// pestaña por separado sin perder el contador "Abiertas (N)".
+export const CONSULTA_ESTADOS_ABIERTOS = ['abierta', 'en_proceso'] as const;
+export const CONSULTA_ESTADOS_RESUELTOS = CONSULTA_ESTADOS.filter(
+  (e) => !(CONSULTA_ESTADOS_ABIERTOS as readonly string[]).includes(e)
+);
 
 export const CONSULTA_URGENCIA_LABELS: Record<ConsultaUrgencia, string> = {
   normal: 'Normal',

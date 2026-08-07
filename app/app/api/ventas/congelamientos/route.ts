@@ -6,7 +6,10 @@ import { requireApiRole } from '@/lib/supabase/guards';
 import { congelamientoCreateSchema } from '@/lib/ventas/schemas';
 import { rolesQuePueden } from '@/lib/ventas/permisos';
 
-// GET - historial de congelamientos (activos y liberados) de cartera.
+const PAGE_SIZE = 20;
+
+// GET - historial de congelamientos (activos y liberados) de cartera,
+// paginado. Ordena por congelado_at (no created_at) — la fecha de negocio.
 export async function GET(request: Request) {
   try {
     const { response } = await requireApiRole();
@@ -15,16 +18,23 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const entidadId = searchParams.get('entidad_id');
     const estado = searchParams.get('estado');
+    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+    const from = (page - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
 
     const supabase = createSupabaseServerClient();
-    let query = supabase.from('cliente_congelamientos').select('*').order('congelado_at', { ascending: false });
+    let query = supabase
+      .from('cliente_congelamientos')
+      .select('*', { count: 'exact' })
+      .order('congelado_at', { ascending: false })
+      .range(from, to);
     if (entidadId) query = query.eq('entidad_id', entidadId);
     if (estado) query = query.eq('estado', estado);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ data: data ?? [] });
+    return NextResponse.json({ data: data ?? [], count: count ?? 0, page, pageSize: PAGE_SIZE });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

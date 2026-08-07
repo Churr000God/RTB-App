@@ -3,21 +3,29 @@ export const dynamic = 'force-dynamic';
 import { requireActiveUser } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { ConsultasBandeja } from './consultas-bandeja';
+import { CONSULTA_ESTADOS_ABIERTOS } from '@/lib/ventas/config';
 import { MessageCircleQuestion } from 'lucide-react';
+
+const PAGE_SIZE = 20;
 
 // Bandeja de Compras-ligero (formalizado en 030): 'ventas' levanta la
 // consulta con descripción libre sin que el producto exista; 'compras'
 // la responde con el producto ya dado de alta (sus rutas normales) y el
-// costo real. Server Component: primera carga vía Supabase directo.
+// costo real. Server Component: primera carga vía Supabase directo, sólo
+// la pestaña Abiertas (la que se ve al entrar) — paginación posterior y
+// la pestaña Resueltas las resuelve ConsultasBandeja contra
+// /api/ventas/consultas (antes .limit(100) sin paginación real y con las
+// dos pestañas filtradas en memoria — AUDITORIA_RTB-VEN-01.md §3.2).
 export default async function ConsultasPage() {
   const auth = await requireActiveUser();
   const supabase = createSupabaseServerClient();
 
-  const { data: consultas } = await supabase
+  const { data: consultas, count } = await supabase
     .from('ventas_consultas_compras')
-    .select('*')
+    .select('*', { count: 'exact' })
+    .in('estado', CONSULTA_ESTADOS_ABIERTOS as readonly string[])
     .order('created_at', { ascending: false })
-    .limit(100);
+    .range(0, PAGE_SIZE - 1);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -30,7 +38,13 @@ export default async function ConsultasPage() {
         </p>
       </div>
 
-      <ConsultasBandeja consultas={consultas ?? []} rol={auth.profile.role} />
+      <ConsultasBandeja
+        consultas={consultas ?? []}
+        count={count ?? 0}
+        abiertas={count ?? 0}
+        pageSize={PAGE_SIZE}
+        rol={auth.profile.role}
+      />
     </div>
   );
 }

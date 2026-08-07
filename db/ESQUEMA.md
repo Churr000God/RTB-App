@@ -131,7 +131,7 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `inventario_alerta_stock(producto_id?)` | tabla | Alerta ⚪/🔴/🟢, bloqueo de compra y acción sugerida (RTB-PRO-COM-01 §III) |
 | `inventario_verificar_consistencia()` | tabla | Consola de auditoría — sólo `super_admin`/`direccion`; `ajuste_sin_autorizacion` debería ser siempre 0 filas |
 | `costo_promedio_global(producto_id, fecha?)` (`028`) | `numeric` | Costo base de Ventas: promedio ponderado por cantidad de **todas** las ubicaciones (a diferencia de `costo_unitario_vigente()`, que sólo toma la de mayor existencia). No se toca esa función — el kardex sigue dependiendo de su comportamiento actual |
-| `costo_venta_vigente(producto_id, fecha?)` / `costo_venta_detalle(producto_id)` (`028`) | `numeric` / `jsonb` | `coalesce(override manual activo, costo_promedio_global × (1+margen de la familia))`. `NULL` si la familia no tiene margen y no hay override — "producto sin precio calculable", sin margen global de respaldo a propósito |
+| `costo_venta_vigente(producto_id, fecha?)` / `costo_venta_detalle(producto_id)` (`028`, optimizada en `036`) | `numeric` / `jsonb` | `coalesce(override manual activo, costo_promedio_global × (1+margen de la familia))`. `NULL` si la familia no tiene margen y no hay override — "producto sin precio calculable", sin margen global de respaldo a propósito. `036` reescribió ambas con `cross join lateral` para evaluar `costo_promedio_global()` una sola vez por llamada (antes: 2 y hasta 7 respectivamente, sin memoización de una función `stable` dentro del mismo `SELECT`) — misma semántica exacta, verificada igual en 7 escenarios comparativos (`old` vs `new`) |
 | `producto_precio_venta_fijar(producto_id, precio, motivo)` / `_revertir(producto_id, motivo)` (`028`) | `uuid` / `void` | Únicas escritoras de `producto_precio_venta`; sólo `super_admin`/`direccion`. Fijar desactiva cualquier override anterior e inserta uno nuevo — nunca edita en sitio |
 | `cliente_puede_operar(entidad_id)` (`029`) | `jsonb` (`{puede, estado, motivo, congelamiento_id, monto_maximo}`) | El veredicto único de cartera: cruza `entidades.estado` (bloqueo administrativo, sin tocar) + `cliente_congelamientos` + `cliente_excepciones`. Estados: `normal`\|`descongelada`\|`excepcion_autorizada`\|`en_revision`\|`congelada`\|`bloqueada` |
 | `cliente_congelamiento_before_update()` (`029`) | trigger | Congela `entidad_id`/`motivo`/`saldo_origen`/`autorizado_por`; estampa `liberado_at`/`liberado_por` al cambiar `estado` |
@@ -140,8 +140,8 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `ventas_cotizacion_enviar/_rechazar/_cancelar/_aprobar()` (`030`, `031`) | `jsonb` | Transiciones de cotización. `_aprobar()` es la más delicada: evidencia + pedido + N líneas + N apartados de reserva, una sola transacción |
 | `ventas_consulta_responder()` / `_cancelar()` (`030`) | `jsonb` | Compras-ligero formalizado — responde con producto+costo y propaga a las líneas en consulta (que quedan pendientes de que Ventas elija precio) |
 | `ventas_pedido_liberar_almacen()` (`031`) | `jsonb` | Reserva → compromiso: un solo `UPDATE` de `nivel` que no toca `cantidad_apartada` |
-| `apartados_before_update()` (`011`, reemplazada en `031`) | trigger | Añade el congelamiento de `pedido_id` y prohíbe `compromiso→reserva` sobre la función que ya usa Almacén |
-| `ventas_nr_emitir()` / `ventas_nr_despachar()` (`032`) | `jsonb` | Emite la NR (Vía A) y despacha al kardex (`salida_venta` + consumo/partición de apartado) — única vía por la que `ventas` llega a escribir en `inventario_movimientos` sin ampliar su RLS |
+| `apartados_before_update()` (`011`, reemplazada en `031`, `035`) | trigger | Añade el congelamiento de `pedido_id`/`pedido_linea_id` y prohíbe `compromiso→reserva` sobre la función que ya usa Almacén |
+| `ventas_nr_emitir()` / `ventas_nr_despachar()` (`032`, `despachar` reemplazada en `035`) | `jsonb` | Emite la NR (Vía A) y despacha al kardex (`salida_venta` + consumo/partición de apartado, emparejado por `pedido_linea_id` exacto) — única vía por la que `ventas` llega a escribir en `inventario_movimientos` sin ampliar su RLS |
 | `ventas_nr_seguimiento_after_insert()` (`032`) | trigger | Cachea el último seguimiento en `ventas_notas_remision.ultimo_contacto_at`/`nota_ultimo_contacto` |
 | `ventas_autorizacion_resolver()` (`033`) | `jsonb` | Resuelve una excepción/corrección de Ventas — el aprobador nunca puede ser el solicitante |
 | `vinculo_valida_cobertura_nr()` / `_partida()` (`033`) | constraint trigger diferido | Impide que la cobertura de PO exceda lo entregado de la NR o lo declarado de la partida — evita el doble conteo sin contador denormalizado |
@@ -217,6 +217,7 @@ erDiagram
     ventas_pedidos ||--o{ ventas_pedido_lineas : ""
     ventas_cotizacion_lineas ||--o{ ventas_pedido_lineas : "cotizacion_linea_id"
     ventas_pedidos ||--o{ inventario_apartados : "pedido_id (031)"
+    ventas_pedido_lineas ||--o{ inventario_apartados : "pedido_linea_id (035)"
     ventas_pedidos ||--o| ventas_notas_remision : ""
     ventas_notas_remision ||--o{ ventas_nr_lineas : ""
     ventas_pedido_lineas ||--o{ ventas_nr_lineas : "pedido_linea_id"
@@ -991,16 +992,27 @@ promoción reserva→compromiso (`ventas_pedido_liberar_almacen()`) es un
 `ventas`/`almacen` pudieran forjar `nivel`/`pedido_id` al dar de alta un
 apartado.
 
-**⚠️ Limitación conocida, sin corregir:** la tabla no liga cada apartado a
-la línea de pedido que lo originó (sólo a `pedido_id`, no
-`pedido_linea_id`). `ventas_nr_despachar()` (`032`) empareja apartado↔línea
-de NR sólo por `producto_id` con `order by created_at limit 1` — si un
-pedido tiene dos o más líneas del mismo producto, puede consumir el
-apartado equivocado y rechazar en falso un despacho legítimo. Confirmado
-por SQL y clic a clic con datos reales; ver
-`contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1 y
-`db/procesos/ciclo-de-venta.md` §5. Corrección propuesta: añadir
-`pedido_linea_id`/`nr_linea_id` aquí.
+**`pedido_linea_id` (`035`, corrige el hallazgo crítico #1):**
+`inventario_apartados` gana `pedido_linea_id` (FK compuesta
+`(pedido_linea_id, pedido_id)` → `ventas_pedido_lineas (id, pedido_id)`,
+`MATCH SIMPLE` — no se evalúa si alguna columna es `NULL`, así que un
+apartado libre de Almacén sin pedido sigue sin verse afectado). Antes,
+`ventas_nr_despachar()` (`032`) emparejaba apartado↔línea de NR sólo por
+`producto_id` con `order by created_at limit 1`; si un pedido tenía dos o
+más líneas del mismo producto —`ventas_cotizacion_aprobar()` inserta todas
+las reservas de un pedido en el mismo `INSERT ... SELECT`, así que
+comparten `created_at` al microsegundo, el `order by` no desempata nada—
+podía consumir el apartado equivocado y rechazar en falso un despacho
+legítimo. Confirmado por SQL y clic a clic con datos reales
+(`contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1). `ventas_nr_despachar()`
+ahora empareja por `pedido_linea_id` exacto (resuelto desde
+`ventas_nr_lineas.pedido_linea_id`, `NOT NULL` desde `032`), respaldado por
+`uq_apartados_pedido_linea_activo` (índice único parcial: como máximo una
+reserva `activo` por línea de pedido) y el `CHECK apartados_pedido_linea_chk`
+(`pedido_id is null ⇔ pedido_linea_id is null`). Los 3 apartados históricos
+de `PED-000019` (evidencia QA del propio hallazgo) se backfillearon en la
+misma migración, sin sanear la incoherencia que el bug había dejado —
+documentada tal cual en `035_apartados_pedido_linea.sql`.
 
 ### `ventas_notas_remision` / `ventas_nr_lineas` / `ventas_nr_seguimientos` (`032`)
 
@@ -1039,6 +1051,23 @@ duplicidad confirmada, corrección de documento) es tabla propia — **no**
 extiende `solicitudes_cambio`/`cambio_controlado` (`ALTER TYPE ... ADD
 VALUE` no es seguro dentro de la transacción de `apply_migration`). Mismo
 `CHECK` anti-autoaprobación que `aju_no_autoaprobacion_chk`.
+
+**Cancelación (`036`).** `ventas_po_nr_vinculos` ganó `cancelado_at`/
+`cancelado_por`/`motivo_cancelacion` + `vpnv_cancelacion_chk` (equivalencia
+`estado='cancelado'` ⟺ las tres columnas no nulas, mismo idioma que
+`vaut_resolucion_chk`) y trigger `audit_row()` (antes era, junto con
+`ventas_po_partidas`, de las pocas tablas del módulo sin auditoría).
+`ventas_vinculo_cancelar(p_vinculo_id, p_motivo)` es la única escritora:
+nunca borra la fila, bloquea si el vínculo ya está
+`aprobado_para_facturacion`/`facturado`, y recalcula PO/NR **hacia
+atrás** — el `CASE` de `ventas_po_validar()` de arriba sólo avanza. Con
+cero vínculos activos en toda la PO el estado vuelve a `en_validacion`
+(no `parcialmente_vinculada`, que con cero cobertura mentiría); la NR
+sólo se toca si sigue en `parcialmente_respaldada`/`po_vinculada`, nunca
+si ya es `facturada`/`pagada_cerrada`/`cancelada`/`con_incidencia`. El
+índice `uq_vinculo_par` (parcial, excluye `cancelado`) permite re-vincular
+el mismo par después sin chocar — verificado el ciclo completo (validar →
+cancelar → re-vincular) por SQL simulando rol y clic a clic real.
 
 ---
 
@@ -1093,9 +1122,10 @@ URLs, nunca en código `'use client'`.
 - RTB-VEN-01 añade ~25 funciones `SECURITY DEFINER` más a la lista de RPC
   expuestas (`cliente_puede_operar`, `costo_venta_detalle`,
   `ventas_cotizacion_aprobar`, `ventas_nr_despachar`, `ventas_po_validar`,
-  etc.) — mismo criterio ya aceptado: cada una valida el rol de negocio
-  (`current_user_role()`) y el actor (`auth.uid()`) **dentro** de la
-  función, no depende de que PostgREST oculte el endpoint.
+  `ventas_vinculo_cancelar` (`036`), etc.) — mismo criterio ya aceptado:
+  cada una valida el rol de negocio (`current_user_role()`) y el actor
+  (`auth.uid()`) **dentro** de la función, no depende de que PostgREST
+  oculte el endpoint.
 - `unused_index` sobre las ~45 FK de negocio de RTB-INV-01 (`producto_id`,
   `ubicacion_id`, `conteo_id`, `ajuste_id`...) — esperable con la base
   vacía; si persiste con datos reales de producción, revisar entonces.

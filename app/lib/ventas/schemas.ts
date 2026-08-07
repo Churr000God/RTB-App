@@ -162,6 +162,11 @@ export const poValidarSchema = z.object({
   aceptar_codigo_divergente: z.boolean().optional().default(false),
 });
 
+// Cancelar un vínculo PO↔NR capturado por error (ventas_vinculo_cancelar(), 036).
+export const vinculoCancelarSchema = z.object({
+  motivo: motivoSchema,
+});
+
 // ---------- Autorizaciones (excepciones/correcciones de Ventas) ----------
 
 export const ventasAutorizacionCreateSchema = z.object({

@@ -3,6 +3,8 @@
 // Mismo patrón que app/types/entidades.ts: tuplas `as const` que alimentan
 // z.enum(...) sin duplicar literales, en el mismo orden que el SQL.
 
+import { type ApartadoNivel } from './ventas';
+
 export const UNIDAD_TIPOS = ['conteo', 'agrupacion', 'longitud', 'peso', 'volumen'] as const;
 export type UnidadTipo = (typeof UNIDAD_TIPOS)[number];
 
@@ -208,6 +210,14 @@ export type ProductoConMarca = Producto & {
   producto_marcas: Pick<ProductoMarca, 'clave' | 'nombre'> | null;
 };
 
+/** Forma mínima del embed PostgREST `productos(codigo_interno, nombre)` —
+ *  lo que necesita components/inventario/producto-etiqueta.tsx para
+ *  mostrar código+nombre en vez del UUID crudo de producto_id. */
+export interface ProductoResumen {
+  codigo_interno: string;
+  nombre: string;
+}
+
 /** 021_producto_imagenes.sql — fotos de catálogo, 0..N con una principal. */
 export interface ProductoImagen {
   id: string;
@@ -326,6 +336,14 @@ export interface InventarioApartado {
   motivo_liberacion: string | null;
   created_at: string;
   updated_at: string;
+  // 031 (RTB-VEN-01): nivel/pedido_id de reserva↔compromiso. pedido_linea_id
+  // (035) liga la reserva a su línea de pedido exacta — el emparejamiento que
+  // ventas_nr_despachar() usa en vez de adivinar por producto_id (hallazgo
+  // crítico #1, contexto/AUDITORIA_RTB-VEN-01.md). Ambos NULL en un apartado
+  // libre de Almacén sin pedido de Ventas de por medio.
+  nivel: ApartadoNivel;
+  pedido_id: string | null;
+  pedido_linea_id: string | null;
 }
 
 export interface InventarioMovimiento {

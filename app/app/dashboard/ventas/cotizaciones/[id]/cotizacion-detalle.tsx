@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -9,8 +8,11 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ProductoCombobox } from '@/components/inventario/producto-combobox';
+import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
 import { CotizacionEstadoBadge } from '@/components/ventas/estado-badge';
 import { MotivoDialog } from '@/components/inventario/motivo-dialog';
+import { Actualizando } from '@/components/ui/actualizando';
+import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
 import { puede } from '@/lib/ventas/permisos';
 import { DATOS_FALTANTES_LABELS, PRECIO_ORIGEN_LABELS } from '@/lib/ventas/config';
 import { formatearMoneda, formatearPorcentaje } from '@/lib/ventas/validaciones';
@@ -26,12 +28,13 @@ interface Props {
   userId: string;
 }
 
-export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasIniciales, rol, userId }: Props) {
-  const router = useRouter();
-  const [cotizacion, setCotizacion] = useState(cotizacionInicial);
-  const [lineas, setLineas] = useState<CotizacionLineaRow[]>(lineasIniciales);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+// El servidor manda: cotizacion/lineas llegan como props del Server
+// Component (page.tsx) y ya no se espejan en useState — cada mutación
+// exitosa pasa por useAccionServidor(), que hace router.refresh() y deja
+// que Next vuelva a pedir esas props. Ver contexto/AUDITORIA_RTB-VEN-01.md
+// §7.3 (causa raíz: un useState(prop) sólo lee su valor inicial).
+export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, userId }: Props) {
+  const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
 
   const esBorrador = cotizacion.estado === 'borrador';
   const puedeAdministrar = rol === 'super_admin' || rol === 'direccion' || (rol === 'ventas' && cotizacion.vendedor_id === userId);
@@ -39,33 +42,13 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
   const lineasActivas = lineas.filter((l) => l.activo);
   const hayPendientes = lineasActivas.some((l) => l.en_consulta);
 
-  const recargar = async () => {
-    const res = await fetch(`/api/ventas/cotizaciones/${cotizacion.id}`);
-    const data = await res.json().catch(() => null);
-    if (data?.data) {
-      const { lineas: l, ...cabecera } = data.data;
-      setCotizacion((prev: any) => ({ ...prev, ...cabecera }));
-      setLineas(l ?? []);
-    }
-  };
-
   const accion = async (url: string, body?: unknown) => {
-    setError(null);
-    setLoading(true);
-    const res = await fetch(url, {
+    const res = await ejecutar(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
     });
-    const data = await res.json().catch(() => ({}));
-    setLoading(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'Ocurrió un error');
-      return false;
-    }
-    await recargar();
-    router.refresh();
-    return true;
+    return res.ok;
   };
 
   return (
@@ -81,6 +64,7 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
           <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-3">
             {cotizacion.folio}
             <CotizacionEstadoBadge estado={cotizacion.estado} />
+            <Actualizando activo={refrescando} />
           </h1>
           <p className="text-muted-foreground mt-1">
             {cotizacion.entidades?.nombre_comercial ?? cotizacion.entidades?.nombre_legal} · Vigencia: {cotizacion.vigencia_hasta ?? '—'}
@@ -90,11 +74,11 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
           {esBorrador && puedeAdministrar && (
             <Button
               onClick={() => accion(`/api/ventas/cotizaciones/${cotizacion.id}/enviar`)}
-              disabled={loading || lineasActivas.length === 0 || hayPendientes || !cotizacion.vigencia_hasta}
+              disabled={ocupado || lineasActivas.length === 0 || hayPendientes || !cotizacion.vigencia_hasta}
               className="bg-rtb-teal hover:bg-rtb-teal/90 text-white"
               title={hayPendientes ? 'Hay líneas en consulta con Compras' : !cotizacion.vigencia_hasta ? 'Define la vigencia' : ''}
             >
-              {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {ocupado && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Enviar al cliente
             </Button>
           )}
@@ -102,7 +86,7 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
           {cotizacion.estado === 'enviada' && puedeAdministrar && (
             <MotivoDialog
               trigger={
-                <Button variant="outline" disabled={loading}>
+                <Button variant="outline" disabled={ocupado}>
                   Rechazar
                 </Button>
               }
@@ -116,7 +100,7 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
           {(esBorrador || cotizacion.estado === 'enviada') && puedeAdministrar && (
             <MotivoDialog
               trigger={
-                <Button variant="outline" className="text-destructive" disabled={loading}>
+                <Button variant="outline" className="text-destructive" disabled={ocupado}>
                   Cancelar
                 </Button>
               }
@@ -157,7 +141,7 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
           </thead>
           <tbody>
             {lineasActivas.map((l) => (
-              <LineaRow key={l.id} linea={l} puedeEditar={puedeEditar} onCambio={recargar} />
+              <LineaRow key={l.id} linea={l} puedeEditar={puedeEditar} />
             ))}
             {lineasActivas.length === 0 && (
               <tr>
@@ -170,46 +154,27 @@ export function CotizacionDetalle({ cotizacion: cotizacionInicial, lineasInicial
         </table>
       </div>
 
-      {puedeEditar && <AgregarLineaForm cotizacionId={cotizacion.id} entidadId={cotizacion.entidad_id} onAgregada={recargar} />}
+      {puedeEditar && <AgregarLineaForm cotizacionId={cotizacion.id} entidadId={cotizacion.entidad_id} />}
     </div>
   );
 }
 
-function LineaRow({
-  linea,
-  puedeEditar,
-  onCambio,
-}: {
-  linea: CotizacionLineaRow;
-  puedeEditar: boolean;
-  onCambio: () => Promise<void>;
-}) {
-  const [enviando, setEnviando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function LineaRow({ linea, puedeEditar }: { linea: CotizacionLineaRow; puedeEditar: boolean }) {
+  const { ejecutar, ocupado, error } = useAccionServidor();
 
-  const patch = async (body: Record<string, unknown>) => {
-    setError(null);
-    setEnviando(true);
-    const res = await fetch(`/api/ventas/cotizaciones/${linea.cotizacion_id}/lineas/${linea.id}`, {
+  const patch = (body: Record<string, unknown>) =>
+    ejecutar(`/api/ventas/cotizaciones/${linea.cotizacion_id}/lineas/${linea.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await res.json().catch(() => ({}));
-    setEnviando(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo actualizar la línea.');
-      return;
-    }
-    await onCambio();
-  };
 
   if (linea.en_consulta) {
     return (
       <tr className="border-b border-border/50 bg-amber-50/60">
         <td className="py-2 px-3">
           <div className="flex flex-col">
-            <span>{linea.descripcion_libre ?? 'En consulta con Compras'}</span>
+            <ProductoEtiqueta producto={linea.productos} descripcion={linea.descripcion_libre} productoId={linea.producto_id} />
             <span className="text-xs font-medium text-amber-700">
               {linea.producto_id ? 'Compras respondió — elige el precio' : 'Esperando respuesta de Compras'}
             </span>
@@ -226,7 +191,7 @@ function LineaRow({
               className="justify-start"
             >
               {(['refaccion', 'ariba', 'costo_venta'] as PrecioOrigenVenta[]).map((p) => (
-                <ToggleGroupItem key={p} value={p} disabled={enviando} className="text-xs">
+                <ToggleGroupItem key={p} value={p} disabled={ocupado} className="text-xs">
                   {PRECIO_ORIGEN_LABELS[p]}
                 </ToggleGroupItem>
               ))}
@@ -237,7 +202,7 @@ function LineaRow({
         </td>
         {puedeEditar && (
           <td className="py-2 px-3">
-            <button onClick={() => patch({ activo: false })} className="text-destructive">
+            <button onClick={() => patch({ activo: false })} disabled={ocupado} className="text-destructive">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </td>
@@ -248,7 +213,10 @@ function LineaRow({
 
   return (
     <tr className="border-b border-border/50">
-      <td className="py-2 px-3">{linea.descripcion_libre ?? linea.producto_id}</td>
+      <td className="py-2 px-3">
+        <ProductoEtiqueta producto={linea.productos} descripcion={linea.descripcion_libre} productoId={linea.producto_id} />
+        {error && <span className="block text-xs text-destructive mt-0.5">{error}</span>}
+      </td>
       <td className="py-2 px-3 text-right tabular-nums">{linea.cantidad}</td>
       <td className="py-2 px-3 text-xs text-muted-foreground">
         {linea.precio_origen ? PRECIO_ORIGEN_LABELS[linea.precio_origen] : '—'}
@@ -261,7 +229,7 @@ function LineaRow({
       <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatearMoneda(linea.importe)}</td>
       {puedeEditar && (
         <td className="py-2 px-3">
-          <button onClick={() => patch({ activo: false })} className="text-destructive">
+          <button onClick={() => patch({ activo: false })} disabled={ocupado} className="text-destructive">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </td>
@@ -270,21 +238,12 @@ function LineaRow({
   );
 }
 
-function AgregarLineaForm({
-  cotizacionId,
-  entidadId,
-  onAgregada,
-}: {
-  cotizacionId: string;
-  entidadId: string;
-  onAgregada: () => Promise<void>;
-}) {
+function AgregarLineaForm({ cotizacionId, entidadId }: { cotizacionId: string; entidadId: string }) {
+  const { ejecutar, ocupado, error, setError } = useAccionServidor();
   const [productoId, setProductoId] = useState<string | null>(null);
   const [cantidad, setCantidad] = useState('1');
   const [precioOrigen, setPrecioOrigen] = useState<PrecioOrigenVenta | null>(null);
   const [precios, setPrecios] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [enviando, setEnviando] = useState(false);
   const [consultaOpen, setConsultaOpen] = useState(false);
 
   useEffect(() => {
@@ -306,23 +265,15 @@ function AgregarLineaForm({
       setError('Elige un precio.');
       return;
     }
-    setError(null);
-    setEnviando(true);
-    const res = await fetch(`/api/ventas/cotizaciones/${cotizacionId}/lineas`, {
+    const res = await ejecutar(`/api/ventas/cotizaciones/${cotizacionId}/lineas`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ producto_id: productoId, cantidad: Number(cantidad), precio_origen: precioOrigen }),
     });
-    const data = await res.json().catch(() => ({}));
-    setEnviando(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo agregar la línea.');
-      return;
-    }
+    if (!res.ok) return;
     setProductoId(null);
     setCantidad('1');
     setPrecioOrigen(null);
-    await onAgregada();
   };
 
   return (
@@ -338,10 +289,7 @@ function AgregarLineaForm({
           <ConsultarComprasDialogContent
             cotizacionId={cotizacionId}
             entidadId={entidadId}
-            onCreada={async () => {
-              setConsultaOpen(false);
-              await onAgregada();
-            }}
+            onCreada={() => setConsultaOpen(false)}
           />
         </Dialog>
       </div>
@@ -398,8 +346,8 @@ function AgregarLineaForm({
         </div>
       )}
 
-      <Button onClick={agregar} disabled={enviando || !productoId} size="sm" className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-        {enviando ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
+      <Button onClick={agregar} disabled={ocupado || !productoId} size="sm" className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+        {ocupado ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
         Agregar línea
       </Button>
     </div>
@@ -413,7 +361,7 @@ function ConsultarComprasDialogContent({
 }: {
   cotizacionId: string;
   entidadId: string;
-  onCreada: () => Promise<void>;
+  onCreada: () => void;
 }) {
   const [descripcion, setDescripcion] = useState('');
   const [marca, setMarca] = useState('');
@@ -423,6 +371,9 @@ function ConsultarComprasDialogContent({
   const [urgencia, setUrgencia] = useState('normal');
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  // Dos peticiones secuenciales (consulta, luego línea) — sólo la segunda
+  // dispara el refresco de servidor, con useAccionServidor.
+  const { ejecutar: ejecutarLinea, refrescando } = useAccionServidor();
 
   const crear = async () => {
     if (descripcion.trim().length < 3) {
@@ -452,18 +403,17 @@ function ConsultarComprasDialogContent({
       return;
     }
 
-    const resLinea = await fetch(`/api/ventas/cotizaciones/${cotizacionId}/lineas`, {
+    const resLinea = await ejecutarLinea(`/api/ventas/cotizaciones/${cotizacionId}/lineas`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ consulta_id: dataConsulta.data.id, descripcion_libre: descripcion, cantidad: Number(cantidad) }),
     });
-    const dataLinea = await resLinea.json().catch(() => ({}));
     setEnviando(false);
     if (!resLinea.ok) {
-      setError(dataLinea?.error ?? 'La consulta se creó, pero no se pudo agregar la línea.');
+      setError(resLinea.data?.error ?? 'La consulta se creó, pero no se pudo agregar la línea.');
       return;
     }
-    await onCreada();
+    onCreada();
   };
 
   return (
@@ -510,8 +460,8 @@ function ConsultarComprasDialogContent({
         {error && <p className="text-xs text-destructive">{error}</p>}
       </div>
       <DialogFooter>
-        <Button size="sm" onClick={crear} disabled={enviando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-          {enviando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+        <Button size="sm" onClick={crear} disabled={enviando || refrescando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+          {(enviando || refrescando) && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
           Enviar consulta
         </Button>
       </DialogFooter>

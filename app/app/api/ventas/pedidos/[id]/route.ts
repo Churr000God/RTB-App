@@ -17,7 +17,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 
     const { data: lineas, error: errorLineas } = await supabase
       .from('ventas_pedido_lineas')
-      .select('*')
+      .select('*, productos(codigo_interno, nombre)')
       .eq('pedido_id', params.id);
     if (errorLineas) return NextResponse.json({ error: errorLineas.message }, { status: 500 });
 

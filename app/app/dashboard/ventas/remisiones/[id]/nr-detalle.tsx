@@ -1,12 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { NREstadoBadge } from '@/components/ventas/estado-badge';
+import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
+import { Actualizando } from '@/components/ui/actualizando';
+import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
 import { ROLES_DESPACHAN_NR } from '@/lib/ventas/config';
 import { CANAL_ORIGENES } from '@/types/entidades';
@@ -22,25 +24,13 @@ interface Props {
   rol: UserRole;
 }
 
-export function NrDetalle({ nr: nrInicial, lineas: lineasIniciales, seguimientos: seguimientosIniciales, cobertura, rol }: Props) {
-  const router = useRouter();
-  const [nr, setNr] = useState(nrInicial);
-  const [lineas, setLineas] = useState(lineasIniciales);
-  const [seguimientos, setSeguimientos] = useState(seguimientosIniciales);
-  const [error, setError] = useState<string | null>(null);
+// nr/lineas/seguimientos/cobertura llegan como props del Server Component;
+// cada mutación (despachar, seguimiento) pasa por useAccionServidor(), que
+// hace router.refresh() para que las 4 tarjetas de cobertura y la tabla se
+// recalculen solas (contexto/AUDITORIA_RTB-VEN-01.md §7.3).
+export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol }: Props) {
+  const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
   const puedeDespachar = (ROLES_DESPACHAN_NR as readonly string[]).includes(rol);
-
-  const recargar = async () => {
-    const res = await fetch(`/api/ventas/notas-remision/${nr.id}`);
-    const data = await res.json().catch(() => null);
-    if (data?.data) {
-      const { lineas: l, seguimientos: s, ...cabecera } = data.data;
-      setNr((prev: any) => ({ ...prev, ...cabecera }));
-      setLineas(l ?? []);
-      setSeguimientos(s ?? []);
-    }
-    router.refresh();
-  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -55,10 +45,11 @@ export function NrDetalle({ nr: nrInicial, lineas: lineasIniciales, seguimientos
           <h1 className="text-2xl font-display font-bold text-rtb-navy tracking-tight flex items-center gap-3">
             {nr.folio}
             <NREstadoBadge estado={nr.estado} />
+            <Actualizando activo={refrescando} />
           </h1>
           <p className="text-muted-foreground mt-1">{nr.entidades?.nombre_comercial ?? nr.entidades?.nombre_legal}</p>
         </div>
-        {puedeDespachar && <DespacharDialog nrId={nr.id} lineas={lineas} onDespachado={recargar} setError={setError} />}
+        {puedeDespachar && <DespacharDialog nrId={nr.id} lineas={lineas} ejecutar={ejecutar} ocupado={ocupado} setError={setError} />}
       </div>
 
       {error && (
@@ -95,7 +86,9 @@ export function NrDetalle({ nr: nrInicial, lineas: lineasIniciales, seguimientos
           <tbody>
             {lineas.map((l: any) => (
               <tr key={l.id} className="border-b border-border/50">
-                <td className="py-2 px-3">{l.producto_id}</td>
+                <td className="py-2 px-3">
+                  <ProductoEtiqueta producto={l.productos} productoId={l.producto_id} />
+                </td>
                 <td className="py-2 px-3 text-right tabular-nums">{l.cantidad}</td>
                 <td className="py-2 px-3 text-right tabular-nums">{l.cantidad_entregada}</td>
                 <td className="py-2 px-3 text-right tabular-nums">{Number(l.cantidad) - Number(l.cantidad_entregada)}</td>
@@ -106,7 +99,7 @@ export function NrDetalle({ nr: nrInicial, lineas: lineasIniciales, seguimientos
         </table>
       </div>
 
-      <SeguimientoCard nrId={nr.id} seguimientos={seguimientos} onAgregado={recargar} />
+      <SeguimientoCard nrId={nr.id} seguimientos={seguimientos} />
 
       <div className="p-4 bg-rtb-surface/60 rounded-lg text-sm text-muted-foreground">
         Para vincular la PO del cliente contra esta NR, ve a{' '}
@@ -131,17 +124,18 @@ function Tarjeta({ label, valor, alerta }: { label: string; valor: string; alert
 function DespacharDialog({
   nrId,
   lineas,
-  onDespachado,
+  ejecutar,
+  ocupado,
   setError,
 }: {
   nrId: string;
   lineas: any[];
-  onDespachado: () => Promise<void>;
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
   setError: (e: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [cantidades, setCantidades] = useState<Record<string, string>>({});
-  const [enviando, setEnviando] = useState(false);
   const pendientes = lineas.filter((l) => Number(l.cantidad) - Number(l.cantidad_entregada) > 0);
 
   const despachar = async () => {
@@ -152,22 +146,16 @@ function DespacharDialog({
       setError('Indica al menos una cantidad a despachar.');
       return;
     }
-    setError(null);
-    setEnviando(true);
-    const res = await fetch(`/api/ventas/notas-remision/${nrId}/despachar`, {
+    const res = await ejecutar(`/api/ventas/notas-remision/${nrId}/despachar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lineas: payload }),
     });
-    const data = await res.json().catch(() => ({}));
-    setEnviando(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo despachar.');
-      return;
-    }
+    if (!res.ok) return;
+    // El diálogo cierra en cuanto el POST resuelve — el refresh que dispara
+    // ejecutar() sigue en vuelo (useTransition) y no bloquea este cierre.
     setOpen(false);
     setCantidades({});
-    await onDespachado();
   };
 
   return (
@@ -187,7 +175,7 @@ function DespacharDialog({
             return (
               <div key={l.id} className="flex items-center justify-between gap-3">
                 <div className="text-sm">
-                  <p>{l.producto_id}</p>
+                  <ProductoEtiqueta producto={l.productos} productoId={l.producto_id} />
                   <p className="text-xs text-muted-foreground">Pendiente: {pendiente}</p>
                 </div>
                 <input
@@ -204,8 +192,8 @@ function DespacharDialog({
           })}
         </div>
         <DialogFooter>
-          <Button size="sm" onClick={despachar} disabled={enviando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-            {enviando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+          <Button size="sm" onClick={despachar} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            {ocupado && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
             Confirmar despacho
           </Button>
         </DialogFooter>
@@ -214,32 +202,23 @@ function DespacharDialog({
   );
 }
 
-function SeguimientoCard({ nrId, seguimientos, onAgregado }: { nrId: string; seguimientos: any[]; onAgregado: () => Promise<void> }) {
+function SeguimientoCard({ nrId, seguimientos }: { nrId: string; seguimientos: any[] }) {
+  const { ejecutar, ocupado, error, setError } = useAccionServidor();
   const [canal, setCanal] = useState('telefono');
   const [nota, setNota] = useState('');
-  const [enviando, setEnviando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const agregar = async () => {
     if (nota.trim().length < 3) {
       setError('Escribe la nota de seguimiento.');
       return;
     }
-    setError(null);
-    setEnviando(true);
-    const res = await fetch(`/api/ventas/notas-remision/${nrId}/seguimiento`, {
+    const res = await ejecutar(`/api/ventas/notas-remision/${nrId}/seguimiento`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ canal, nota }),
     });
-    const data = await res.json().catch(() => ({}));
-    setEnviando(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo registrar el seguimiento.');
-      return;
-    }
+    if (!res.ok) return;
     setNota('');
-    await onAgregado();
   };
 
   return (
@@ -267,8 +246,8 @@ function SeguimientoCard({ nrId, seguimientos, onAgregado }: { nrId: string; seg
             className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
           />
         </div>
-        <Button size="sm" onClick={agregar} disabled={enviando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-          {enviando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+        <Button size="sm" onClick={agregar} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+          {ocupado && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
           Registrar
         </Button>
       </div>

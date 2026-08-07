@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import Link from 'next/link';
 import { useAuth } from '@/lib/rbac/hooks';
 import { puede } from '@/lib/inventario/permisos';
@@ -8,6 +10,7 @@ import { ProductoEstadoBadge } from '@/components/inventario/estado-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Actualizando } from '@/components/ui/actualizando';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PrecioVentaTab } from '@/components/ventas/precio-venta-tab';
 import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
@@ -67,6 +70,17 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
   const totalTeorica = existenciasIniciales.reduce((acc, e) => acc + Number(e.cantidad_teorica), 0);
   const totalApartada = existenciasIniciales.reduce((acc, e) => acc + Number(e.cantidad_apartada), 0);
 
+  // costo_unitario_vigente() (011_inventario_kardex.sql:690-708) es una
+  // cascada: primero inventario_existencias.costo_promedio (la fila con
+  // más cantidad_teorica), después producto_costos, después el proveedor
+  // preferente. Replicamos SÓLO la primera rama —la única verificable con
+  // los datos que esta página ya trae— para explicar por qué un costo de
+  // catálogo nuevo puede no mover la tarjeta (contexto/AUDITORIA_RTB-VEN-01.md §7.6).
+  const existenciaValuada = [...existenciasIniciales]
+    .filter((e) => e.costo_promedio != null)
+    .sort((a, b) => Number(b.cantidad_teorica) - Number(a.cantidad_teorica))[0] ?? null;
+  const fuenteCosto = costoVigente == null ? null : existenciaValuada ? 'Promedio de inventario' : 'Catálogo o proveedor';
+
   // Estado de imágenes centralizado aquí (no en ImagenesTab) para que la
   // miniatura de la cabecera y la pestaña compartan una sola carga y una
   // sola verdad tras subir/quitar/reordenar.
@@ -124,6 +138,7 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
           label="Costo vigente"
           valor={costoVigente != null ? `$${Number(costoVigente).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : 'Sin costo'}
           borde={costoVigente != null ? 'border-l-rtb-teal' : 'border-l-destructive'}
+          nota={fuenteCosto ?? undefined}
         />
         <KpiCard label="Unidad base" valor={unidad?.clave ?? '—'} borde="border-l-rtb-teal" />
       </div>
@@ -164,7 +179,7 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
           <KardexTab productoId={producto.id} />
         </TabsContent>
         <TabsContent value="costos">
-          <CostosTab productoId={producto.id} costoVigente={costoVigente} />
+          <CostosTab productoId={producto.id} costoVigente={costoVigente} hayCostoPromedio={existenciaValuada != null} />
         </TabsContent>
         <TabsContent value="precio-venta">
           <PrecioVentaTab productoId={producto.id} rol={role} />
@@ -586,8 +601,18 @@ function KardexTab({ productoId }: { productoId: string }) {
   );
 }
 
-function CostosTab({ productoId, costoVigente }: { productoId: string; costoVigente: number | null }) {
+function CostosTab({
+  productoId,
+  costoVigente,
+  hayCostoPromedio,
+}: {
+  productoId: string;
+  costoVigente: number | null;
+  hayCostoPromedio: boolean;
+}) {
+  const router = useRouter();
   const { role } = useAuth();
+  const [refrescando, iniciarRefresco] = useTransition();
   const [costos, setCostos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -604,10 +629,14 @@ function CostosTab({ productoId, costoVigente }: { productoId: string; costoVige
 
   const cargar = async () => {
     setLoading(true);
-    const res = await fetch(`/api/productos/${productoId}/costos`);
-    const data = await res.json();
-    setCostos(data.data ?? []);
+    const res = await fetch(`/api/productos/${productoId}/costos`, { cache: 'no-store' });
+    const data = await res.json().catch(() => ({}));
     setLoading(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo cargar el histórico de costos.');
+      return;
+    }
+    setCostos(data.data ?? []);
   };
 
   useEffect(() => {
@@ -620,6 +649,7 @@ function CostosTab({ productoId, costoVigente }: { productoId: string; costoVige
     const res = await fetch(`/api/productos/${productoId}/costos`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify({
         costo_unitario: Number(costoUnitario),
         origen,
@@ -637,13 +667,21 @@ function CostosTab({ productoId, costoVigente }: { productoId: string; costoVige
     setCostoUnitario('');
     setVigenteDesde('');
     setMotivo('');
-    void cargar();
+    await cargar();
+    toast.success('Costo de catálogo registrado.');
+    // Reevalúa costo_unitario_vigente() (prop del Server Component) — el
+    // KPI de cabecera y el texto de abajo sólo cambian si esta pantalla
+    // no tiene ya un costo_promedio de inventario por delante (ver nota).
+    iniciarRefresco(() => router.refresh());
   };
 
   return (
     <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-display font-semibold text-rtb-navy">Histórico de costo de catálogo</h2>
+        <h2 className="text-sm font-display font-semibold text-rtb-navy flex items-center gap-2">
+          Histórico de costo de catálogo
+          <Actualizando activo={refrescando} />
+        </h2>
         <div className="flex items-center gap-3">
           <p className="text-sm">
             Costo vigente:{' '}
@@ -658,6 +696,17 @@ function CostosTab({ productoId, costoVigente }: { productoId: string; costoVige
           )}
         </div>
       </div>
+
+      {hayCostoPromedio && (
+        <div className="flex items-start gap-2 p-3 bg-rtb-surface/60 rounded-lg text-xs text-muted-foreground">
+          <AlertCircle className="w-3.5 h-3.5 text-rtb-gold shrink-0 mt-0.5" />
+          <span>
+            Este producto tiene existencias valuadas. El &quot;Costo vigente&quot; se toma del costo promedio del
+            inventario, así que un costo de catálogo nuevo quedará registrado en el histórico pero{' '}
+            <strong>no cambiará</strong> esa cifra mientras haya existencias con costo promedio.
+          </span>
+        </div>
+      )}
 
       {creando && (
         <div className="p-3 bg-rtb-surface/60 rounded-lg space-y-2">
@@ -743,11 +792,12 @@ function CostosTab({ productoId, costoVigente }: { productoId: string; costoVige
   );
 }
 
-function KpiCard({ label, valor, borde }: { label: string; valor: string; borde: string }) {
+function KpiCard({ label, valor, borde, nota }: { label: string; valor: string; borde: string; nota?: string }) {
   return (
     <div className={`bg-white rounded-xl p-4 border-l-4 ${borde}`} style={{ boxShadow: 'var(--shadow-sm)' }}>
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{label}</p>
       <p className="text-2xl font-display font-bold text-rtb-navy mt-1 tabular-nums">{valor}</p>
+      {nota && <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">{nota}</p>}
     </div>
   );
 }

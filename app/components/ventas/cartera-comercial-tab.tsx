@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Actualizando } from '@/components/ui/actualizando';
 import { MotivoDialog } from '@/components/inventario/motivo-dialog';
 import { CarteraEstadoBadge } from '@/components/ventas/estado-badge';
 import { CLIENTE_TIPO_LABELS } from '@/lib/ventas/config';
@@ -21,6 +24,11 @@ interface Props {
 // (cliente_puede_operar()) — separado a propósito de entidades.estado,
 // que sigue siendo sólo el bloqueo administrativo.
 export function CarteraComercialTab({ entidadId, requierePo: requierePoInicial, tipoCliente: tipoInicial, rol }: Props) {
+  const router = useRouter();
+  const [refrescando, iniciarRefresco] = useTransition();
+  // requierePo/tipoCliente son campos de formulario en edición, no un
+  // espejo de lectura: tras guardar, router.refresh() trae de vuelta
+  // props actualizadas y el estado local ya coincide.
   const [requierePo, setRequierePo] = useState(requierePoInicial);
   const [tipoCliente, setTipoCliente] = useState<ClienteTipo>(tipoInicial);
   const [estado, setEstado] = useState<{ puede: boolean; estado: ClienteCarteraEstado; motivo: string | null } | null>(null);
@@ -30,8 +38,12 @@ export function CarteraComercialTab({ entidadId, requierePo: requierePoInicial, 
   const puedeCongelar = rol === 'super_admin' || rol === 'direccion';
 
   const cargarEstado = async () => {
-    const res = await fetch(`/api/ventas/clientes/${entidadId}/estado`);
+    const res = await fetch(`/api/ventas/clientes/${entidadId}/estado`, { cache: 'no-store' });
     const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo cargar el estado de cartera.');
+      return;
+    }
     setEstado(data?.data ?? null);
   };
 
@@ -45,17 +57,24 @@ export function CarteraComercialTab({ entidadId, requierePo: requierePoInicial, 
     const res = await fetch(`/api/entidades/${entidadId}/politica-comercial`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify({ requiere_po: requierePo, tipo_cliente: tipoCliente }),
     });
     const data = await res.json().catch(() => ({}));
     setEnviando(false);
-    if (!res.ok) setError(data?.error ?? 'No se pudo guardar.');
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo guardar.');
+      return;
+    }
+    toast.success('Política comercial guardada.');
+    iniciarRefresco(() => router.refresh());
   };
 
   const congelar = (motivo: string) =>
     fetch('/api/ventas/congelamientos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify({ entidad_id: entidadId, motivo }),
     })
       .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
@@ -65,6 +84,7 @@ export function CarteraComercialTab({ entidadId, requierePo: requierePoInicial, 
           return false;
         }
         void cargarEstado();
+        iniciarRefresco(() => router.refresh());
         return true;
       });
 
@@ -102,7 +122,10 @@ export function CarteraComercialTab({ entidadId, requierePo: requierePoInicial, 
       </div>
 
       <div className="bg-white rounded-xl p-5 space-y-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
-        <h2 className="text-sm font-display font-semibold text-rtb-navy">Política comercial</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-display font-semibold text-rtb-navy">Política comercial</h2>
+          <Actualizando activo={refrescando} />
+        </div>
         <div className="flex items-center justify-between text-sm">
           <Label className="text-xs">Requiere PO para facturar</Label>
           <input type="checkbox" checked={requierePo} onChange={(e) => setRequierePo(e.target.checked)} disabled={!puedeEditar} />

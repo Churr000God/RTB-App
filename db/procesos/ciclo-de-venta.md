@@ -21,9 +21,20 @@ cotizaciones/pedidos), `direccion`, `super_admin` sin restricción.
 Despachar una NR y liberar un pedido a Almacén: los anteriores + `almacen`.
 Responder una consulta de Compras-ligero: `compras`, `direccion`,
 `super_admin` — **nunca `ventas`**, que sólo la levanta. Registrar/validar
-una PO: igual que cotizar. Resolver una autorización de Ventas o una
-excepción de cartera: sólo `direccion`/`super_admin`, y nunca el propio
-solicitante (estructural, no de la API).
+una PO: **por rol, no por dueño** — a diferencia de cotizaciones/pedidos,
+`ventas_ordenes_compra_cliente` no tiene `vendedor_id` y
+`ventas_po_validar()` sólo comprueba `current_user_role()`; cualquier
+usuario `ventas`/`direccion`/`super_admin` puede validar/vincular la PO de
+cualquier cliente. "Igual que cotizar" arriba se refiere sólo al conjunto
+de roles, no a la restricción de fila — ver
+`contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y el TODO de `CLAUDE.md`
+(pendiente de confirmar con el dueño del proyecto si una PO consolidada
+puede cubrir NR de varios vendedores). Cancelar un vínculo PO↔NR: los
+mismos que validan (`ventas`/`direccion`/`super_admin`), nunca si el
+vínculo ya está `aprobado_para_facturacion`/`facturado`. Resolver una
+autorización de Ventas o una excepción de cartera: sólo
+`direccion`/`super_admin`, y nunca el propio solicitante (estructural, no
+de la API).
 
 ## Dónde
 
@@ -84,27 +95,33 @@ veces.
 
 `POST /api/ventas/notas-remision/[id]/despachar` con
 `{ lineas: [{ nr_linea_id, cantidad }] }`. Por cada línea,
-`ventas_nr_despachar()` (`032`) inserta un `inventario_movimientos`
-(`salida_venta`, ligado al `apartado_id`) y consume el apartado
-comprometido; si el despacho es parcial, el remanente nace como **fila
-nueva** (el alcance de un apartado es inmutable — no se edita en sitio).
-`ventas` no está en la RLS de `INSERT` del kardex: la función corre como
-su dueño y sólo emite este tipo exacto, ligado a un apartado del propio
-pedido. Errores del kardex (saldo negativo, congelamiento de conteo
-activo) se propagan tal cual — un faltante se registra como discrepancia,
-no como salida forzada.
+`ventas_nr_despachar()` (`032`, reemplazada en `035`) inserta un
+`inventario_movimientos` (`salida_venta`, ligado al `apartado_id`) y
+consume el apartado comprometido de **esa línea de pedido exacta**
+(`pedido_linea_id`, `035`) — no por producto; si el despacho es parcial,
+el remanente nace como **fila nueva** con el mismo `pedido_linea_id` (el
+alcance de un apartado es inmutable — no se edita en sitio). `ventas` no
+está en la RLS de `INSERT` del kardex: la función corre como su dueño y
+sólo emite este tipo exacto, ligado a un apartado del propio pedido.
+Errores del kardex (saldo negativo, congelamiento de conteo activo) se
+propagan tal cual — un faltante se registra como discrepancia, no como
+salida forzada.
 
-**⚠️ Defecto confirmado:** el apartado a consumir se busca sólo por
-`(pedido_id, producto_id, nivel='compromiso')`, `order by created_at limit 1`
-— sin ninguna columna que lo ligue a la línea de pedido/NR específica que
-lo originó. Si un pedido tiene **dos o más líneas del mismo producto**
-(nada lo impide al cotizar), despachar fuera del orden de creación puede
-consumir el apartado de la línea equivocada y luego rechazar un despacho
+**Corregido (`035`, antes hallazgo crítico #1):** el apartado a consumir
+se buscaba sólo por `(pedido_id, producto_id, nivel='compromiso')`,
+`order by created_at limit 1` — sin ninguna columna que lo ligara a la
+línea de pedido/NR específica que lo originó. Si un pedido tenía dos o
+más líneas del mismo producto, despachar fuera del orden de creación
+podía consumir el apartado de la línea equivocada y rechazar un despacho
 legítimo con "la reserva comprometida no alcanza" pese a que el total
-reservado sí alcanza. Confirmado por SQL y clic a clic con datos reales
-(`contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1); corrección propuesta:
-columna `pedido_linea_id`/`nr_linea_id` en `inventario_apartados`, ver
-Pendiente abajo.
+reservado sí alcanzaba — confirmado por SQL y clic a clic con datos
+reales (`contexto/AUDITORIA_RTB-VEN-01.md` hallazgo #1). Ahora
+`inventario_apartados.pedido_linea_id` (FK compuesta a
+`ventas_pedido_lineas (id, pedido_id)`, `035`) liga cada reserva a su
+línea desde que nace en `ventas_cotizacion_aprobar()`, y
+`ventas_nr_despachar()` empareja por esa columna — respaldado por
+`uq_apartados_pedido_linea_activo` (como máximo una reserva activa por
+línea).
 
 ## 6. PO del cliente y vínculos por partida
 
@@ -134,6 +151,20 @@ sobre `ventas_po_nr_vinculos` filtrando por estado — nunca un contador. Dos
 *constraint triggers* diferidos (`vinculo_valida_cobertura_nr`/`_partida`)
 son la última barrera contra el doble conteo.
 
+**Cancelar un vínculo capturado por error** (`ventas_vinculo_cancelar()`,
+`036`): nunca borra la fila — la marca `estado='cancelado'` con
+`cancelado_at`/`cancelado_por`/`motivo_cancelacion` (obligatorio), y
+recalcula el estado de la PO y de la NR **hacia atrás** (el `CASE` de
+`ventas_po_validar()` de arriba sólo avanza). Con cero vínculos activos en
+toda la PO, el estado vuelve a `en_validacion` (no `parcialmente_vinculada`,
+que con cero cobertura sería engañoso); la NR vuelve a `entregada_sin_po`
+si su cobertura llega a cero. Bloqueada si el vínculo ya está
+`aprobado_para_facturacion`/`facturado` — la corrección de un vínculo con
+consecuencia de facturación va por RTB-PRO-FAC-01 (nota de crédito), no por
+aquí. El índice `uq_vinculo_par` excluye `estado='cancelado'`, así que el
+mismo par partida↔línea de NR se puede volver a vincular después sin
+chocar.
+
 ## Qué puede fallar
 
 | Síntoma | Causa |
@@ -141,23 +172,33 @@ son la última barrera contra el doble conteo.
 | "Elige un precio... / producto sin costo no se cotiza" | `cot_linea_precio_chk` / el trigger no encontró precio para el `precio_origen` elegido |
 | "Hay N línea(s) en consulta con Compras" | `ventas_cotizacion_enviar()` — falta que Ventas elija precio en alguna línea ya respondida por Compras |
 | "No se puede crear/aprobar/enviar: [motivo de cartera]" | `cliente_puede_operar()` — congelada, en revisión o bloqueada administrativamente |
-| "La cotización ya expiró: no se puede aprobar" | `vigencia_hasta` pasada — se valida por fecha, no por estado, aunque la pantalla no haya refrescado |
+| "La cotización ya expiró: no se puede aprobar" | `vigencia_hasta` pasada — se valida por fecha, no por estado |
 | "Unidad de captura incompatible con el producto" | La unidad de la línea no es la base ni la de contenido del producto |
-| "No hay una reserva comprometida para el producto..." | Se intentó despachar sin haber liberado el pedido primero |
-| "La reserva comprometida no alcanza..." | Se intentó despachar más de lo reservado para ese producto en ese pedido — **o** es un falso rechazo por el defecto de emparejamiento de apartados descrito arriba (pedido con 2+ líneas del mismo producto) |
+| "No hay una reserva comprometida para la línea de esta NR..." | Se intentó despachar sin haber liberado el pedido primero |
+| "La reserva comprometida no alcanza para despachar esa cantidad de la línea..." | Se intentó despachar más de lo reservado para esa línea de pedido |
 | "Se bloquea la PO completa hasta corregir el documento del cliente" | Costo unitario distinto en al menos una partida, sin subtotal coincidente |
 | "Requiere autorización de Dirección (excepcion_subtotal)" | Subtotal coincide pero los unitarios varían, sin `autorizacion_id` vigente |
 | "El RFC declarado no coincide con el de la entidad" | Rechazo automático de la PO completa |
 | "No puedes resolver tu propia solicitud" | Anti-autoaprobación (`ventas_autorizaciones`/`cliente_excepciones`) |
+| "Este vínculo ya tiene consecuencias de facturación... no se puede cancelar aquí" | El vínculo está `aprobado_para_facturacion`/`facturado` — `ventas_vinculo_cancelar()` lo bloquea |
+| "Este vínculo ya está cancelado" | Doble cancelación — idempotencia de `ventas_vinculo_cancelar()` |
 
 ## Pendiente (fuera de esta entrega)
 
-- **Corregir el emparejamiento apartado↔línea en `ventas_nr_despachar()`**
-  (ver el defecto confirmado en §5) — añadir `pedido_linea_id`/
-  `nr_linea_id` a `inventario_apartados`, poblarlo desde
-  `ventas_cotizacion_aprobar()` (031) y filtrar por esa columna al
-  despachar (032). Migración nueva, no un cambio de una línea — ver TODO
-  en `CLAUDE.md` y `contexto/AUDITORIA_RTB-VEN-01.md`.
+- **Permisos de PO entre vendedores, sin resolver a propósito.** No hay
+  regla inequívoca en código ni en proceso: `030:165-168` sugiere que la
+  visibilidad amplia es intencional ("una PO consolidada puede involucrar
+  NR de otro vendedor del mismo cliente"), pero el texto de "Quién puede"
+  de arriba decía "igual que cotizar" sin aclarar que es sólo por rol.
+  Pendiente de confirmar con el dueño del proyecto: ¿una PO consolidada de
+  un cliente puede cubrir NR de varios vendedores? Si la respuesta es no,
+  la opción implementable sin columna nueva es restringir
+  `ventas_po_validar()` por `vendedor_id` de las NR vinculadas (ver
+  `contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y TODO de `CLAUDE.md`).
+- El resto de los pendientes de RTB-VEN-01 (Vía B sin NR, reloj de
+  cobranza/CFDI) siguen en el TODO de `CLAUDE.md` — el emparejamiento
+  apartado↔línea (antes hallazgo crítico #1) ya se corrigió en `035`, ver
+  §5 arriba.
 - **Vía B (PO directa, sin NR)**: el pedido se aprueba/libera igual, pero
   no tiene una función de despacho dedicada en esta entrega — ver TODO en
   `CLAUDE.md`.

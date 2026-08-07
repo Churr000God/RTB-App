@@ -3,6 +3,8 @@
 // patrón que app/types/entidades.ts / app/types/inventario.ts: tuplas
 // `as const` que alimentan z.enum(...) sin duplicar literales.
 
+import type { ProductoResumen } from './inventario';
+
 export const VENTAS_COTIZACION_ESTADOS = [
   'borrador', 'enviada', 'aprobada', 'rechazada', 'expirada', 'cancelada',
 ] as const;
@@ -107,6 +109,8 @@ export interface CotizacionLineaRow {
   importe: number | null;
   activo: boolean;
   observaciones: string | null;
+  /** Embed PostgREST `productos(codigo_interno, nombre)` — null si producto_id es null o RLS lo oculta. */
+  productos?: ProductoResumen | null;
 }
 
 export interface ConsultaComprasRow {
@@ -156,6 +160,8 @@ export interface PedidoLineaRow {
   precio_unitario: number;
   descuento_porcentaje: number;
   importe: number;
+  /** Embed PostgREST `productos(codigo_interno, nombre)`. */
+  productos?: ProductoResumen | null;
 }
 
 export interface NotaRemisionRow {
@@ -233,6 +239,10 @@ export interface PoNrVinculoRow {
   estado: VinculoEstado;
   autorizacion_id: string | null;
   motivo: string | null;
+  // Cancelación (ventas_vinculo_cancelar(), 036) — nunca se borra la fila.
+  cancelado_at: string | null;
+  cancelado_por: string | null;
+  motivo_cancelacion: string | null;
 }
 
 export interface VentasAutorizacionRow {

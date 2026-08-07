@@ -48,6 +48,13 @@ export const ROLE_COLORS: Record<UserRole, string> = {
   finanzas: 'bg-rose-100 text-rose-800',
 };
 
+// Título de la sección de NAV_SECTIONS que /dashboard reutiliza como
+// fuente única de qué módulos existen y a qué rol se le muestran — evita
+// que dashboard/page.tsx mantenga su propia lista, que ya se desincronizó
+// una vez (Ventas quedó "Próximamente" ahí mucho después de activarse en
+// el sidebar; ver contexto/AUDITORIA_RTB-VEN-01.md §7.5).
+export const SECCION_MODULOS = 'Módulos';
+
 export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Principal',
@@ -137,7 +144,7 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: 'Módulos',
+    title: SECCION_MODULOS,
     items: [
       {
         label: 'Ventas',

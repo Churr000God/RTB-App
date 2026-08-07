@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/rbac/hooks';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
@@ -9,18 +10,27 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AjusteEstadoBadge } from '@/components/inventario/estado-badge';
 import { ProductoCombobox } from '@/components/inventario/producto-combobox';
+import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
 import { UbicacionSelect } from '@/components/inventario/ubicacion-select';
 import { AJUSTE_TIPO_LABELS } from '@/lib/inventario/config';
 import { ROLES_AUTORIZAN_AJUSTES } from '@/lib/inventario/permisos';
 import { ArrowLeft, AlertCircle, FileEdit, Loader2, Paperclip, Plus, Send, ShieldCheck, Zap } from 'lucide-react';
-import type { InventarioAjuste, InventarioAjusteLinea } from '@/types/inventario';
+import type { InventarioAjuste, InventarioAjusteLinea, ProductoResumen } from '@/types/inventario';
 
 type Linea = InventarioAjusteLinea & {
-  productos: { codigo_interno: string; nombre: string } | null;
+  productos: ProductoResumen | null;
   ubicaciones_internas: { codigo: string; nombre: string } | null;
 };
 
+// Única pantalla de detalle 100% cliente del módulo (el resto es Server
+// Component + detalle cliente) — fix mínimo del refresco
+// (contexto/AUDITORIA_RTB-VEN-01.md §7.3), no reestructuración: esperar el
+// refetch antes de reactivar el botón, cache:'no-store', mostrar el error
+// del refetch (antes se tragaba en silencio) y router.refresh() para que
+// la bandeja /dashboard/inventario/ajustes y la ficha de producto no
+// queden viejas al volver a ellas (Router Cache de Next).
 export default function AjusteDetallePage({ params }: { params: { id: string } }) {
+  const router = useRouter();
   const { role, user } = useAuth();
   const [ajuste, setAjuste] = useState<InventarioAjuste | null>(null);
   const [lineas, setLineas] = useState<Linea[]>([]);
@@ -41,13 +51,15 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
   const [motivoRechazo, setMotivoRechazo] = useState('');
 
   const cargar = useCallback(async () => {
-    const res = await fetch(`/api/inventario/ajustes/${params.id}`);
-    const data = await res.json();
-    if (res.ok) {
-      setAjuste(data.ajuste);
-      setLineas(data.lineas ?? []);
-      setSoportePath(data.ajuste.soporte_path ?? '');
+    const res = await fetch(`/api/inventario/ajustes/${params.id}`, { cache: 'no-store' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo cargar el ajuste.');
+      return;
     }
+    setAjuste(data.ajuste);
+    setLineas(data.lineas ?? []);
+    setSoportePath(data.ajuste.soporte_path ?? '');
   }, [params.id]);
 
   useEffect(() => {
@@ -60,15 +72,18 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
-    setLoading(false);
     if (!res.ok) {
+      setLoading(false);
       setError(data?.error ?? 'Ocurrió un error');
       return false;
     }
-    void cargar();
+    await cargar();
+    setLoading(false);
+    router.refresh();
     return true;
   };
 
@@ -206,7 +221,9 @@ export default function AjusteDetallePage({ params }: { params: { id: string } }
           <tbody>
             {lineas.map((l) => (
               <tr key={l.id} className="border-t border-border/50">
-                <td className="py-2 px-4 text-sm">{l.productos?.nombre ?? l.producto_id}</td>
+                <td className="py-2 px-4 text-sm">
+                  <ProductoEtiqueta producto={l.productos} productoId={l.producto_id} />
+                </td>
                 <td className="py-2 px-4 text-sm text-muted-foreground">
                   {l.ubicaciones_internas ? `${l.ubicaciones_internas.codigo} — ${l.ubicaciones_internas.nombre}` : '—'}
                 </td>

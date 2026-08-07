@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     const estado = searchParams.get('estado');
     const entidadId = searchParams.get('entidad_id');
     const vendedorId = searchParams.get('vendedor_id');
-    const page = Math.max(1, Number(searchParams.get('page') ?? '1'));
+    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
     const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ data: data ?? [], count: count ?? 0 });
+    return NextResponse.json({ data: data ?? [], count: count ?? 0, page, pageSize: PAGE_SIZE });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

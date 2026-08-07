@@ -5,6 +5,16 @@ import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 
 import { cn } from '@/lib/utils';
 
+// Radix exige un <TooltipProvider> ancestro incluso si el <TooltipContent>
+// condicional nunca llega a renderizarse — el simple montaje de <Tooltip>
+// sin ancestro ya lanza "Tooltip must be used within TooltipProvider".
+// Este repo NO monta un provider global (ni en app/layout.tsx ni en
+// dashboard/layout.tsx): envuelve cada <Tooltip> con su propio
+// <TooltipProvider> local en el punto de uso — ver
+// ventas/cotizaciones/[id]/cotizacion-detalle.tsx o
+// dashboard/admin/users/page.tsx. Fue justo la falta de este envoltorio lo
+// que tronaba por completo el alta de líneas de cotización
+// (contexto/AUDITORIA_RTB-VEN-01.md §7.1).
 const TooltipProvider = TooltipPrimitive.Provider;
 
 const Tooltip = TooltipPrimitive.Root;

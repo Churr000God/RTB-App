@@ -17,7 +17,7 @@ export default async function NrDetallePage({ params }: { params: { id: string }
   if (!nr) notFound();
 
   const [{ data: lineas }, { data: seguimientos }, { data: cobertura }] = await Promise.all([
-    supabase.from('ventas_nr_lineas').select('*').eq('nr_id', params.id),
+    supabase.from('ventas_nr_lineas').select('*, productos(codigo_interno, nombre)').eq('nr_id', params.id),
     supabase.from('ventas_nr_seguimientos').select('*').eq('nr_id', params.id).order('created_at', { ascending: false }),
     supabase.rpc('ventas_nr_cobertura', { p_nr_id: params.id }),
   ]);

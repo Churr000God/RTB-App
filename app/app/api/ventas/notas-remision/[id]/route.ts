@@ -21,7 +21,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     if (!nr) return NextResponse.json({ error: 'NR no encontrada' }, { status: 404 });
 
     const [{ data: lineas, error: errorLineas }, { data: cobertura }, { data: seguimientos }] = await Promise.all([
-      supabase.from('ventas_nr_lineas').select('*').eq('nr_id', params.id),
+      supabase.from('ventas_nr_lineas').select('*, productos(codigo_interno, nombre)').eq('nr_id', params.id),
       supabase.rpc('ventas_nr_cobertura', { p_nr_id: params.id }),
       supabase
         .from('ventas_nr_seguimientos')

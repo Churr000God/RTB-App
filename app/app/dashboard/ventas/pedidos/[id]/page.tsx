@@ -17,7 +17,7 @@ export default async function PedidoDetallePage({ params }: { params: { id: stri
   if (!pedido) notFound();
 
   const [{ data: lineas }, { data: notaRemision }] = await Promise.all([
-    supabase.from('ventas_pedido_lineas').select('*').eq('pedido_id', params.id),
+    supabase.from('ventas_pedido_lineas').select('*, productos(codigo_interno, nombre)').eq('pedido_id', params.id),
     supabase.from('ventas_notas_remision').select('id, folio, estado').eq('pedido_id', params.id).maybeSingle(),
   ]);
 

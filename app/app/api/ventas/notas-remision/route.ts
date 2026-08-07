@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const estado = searchParams.get('estado');
     const vendedorId = searchParams.get('vendedor_id');
-    const page = Math.max(1, Number(searchParams.get('page') ?? '1'));
+    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
 
     const supabase = createSupabaseServerClient();
 

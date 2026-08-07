@@ -18,7 +18,7 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
 
   const { data: lineas } = await supabase
     .from('ventas_cotizacion_lineas')
-    .select('*')
+    .select('*, productos(codigo_interno, nombre)')
     .eq('cotizacion_id', params.id)
     .order('created_at', { ascending: true });
 
