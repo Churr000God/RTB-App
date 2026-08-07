@@ -62,14 +62,20 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       return NextResponse.json({ error: 'Sólo Compras puede editar los parámetros comerciales.' }, { status: 403 });
     }
 
+    // B-01 (contexto/QA_INTEGRAL_2026-08-06.md): sin .select(), un producto
+    // fuera de RLS devolvía 200 sin editarse — riesgo real en el camino
+    // libre, que pasa por el cliente del propio usuario.
     if (Object.keys(libreBody).length > 0) {
       const parsedLibre = productoUpdateLibreSchema.safeParse(libreBody);
       if (!parsedLibre.success) {
         return NextResponse.json({ error: parsedLibre.error.issues[0]?.message ?? 'Datos inválidos' }, { status: 400 });
       }
       const supabase = createSupabaseServerClient();
-      const { error } = await supabase.from('productos').update(parsedLibre.data).eq('id', params.id);
+      const { data, error } = await supabase.from('productos').update(parsedLibre.data).eq('id', params.id).select('id');
       if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (!data || data.length === 0) {
+        return NextResponse.json({ error: 'No se pudo editar: el producto no existe o no tienes permiso.' }, { status: 403 });
+      }
     }
 
     if (tieneComercial) {
@@ -81,8 +87,11 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         );
       }
       const admin = createSupabaseAdminClient();
-      const { error } = await admin.from('productos').update(parsedComercial.data).eq('id', params.id);
+      const { data, error } = await admin.from('productos').update(parsedComercial.data).eq('id', params.id).select('id');
       if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (!data || data.length === 0) {
+        return NextResponse.json({ error: 'No se pudo editar: el producto no existe.' }, { status: 404 });
+      }
     }
 
     return NextResponse.json({ success: true });

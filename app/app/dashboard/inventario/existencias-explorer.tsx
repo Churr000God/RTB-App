@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Boxes, ClipboardCheck, Loader2, MapPinOff, Search } from 'lucide-react';
@@ -25,33 +25,64 @@ const FILTRO_LABELS: Record<Filtro, string> = {
   nunca_contada: 'Nunca contada',
 };
 
-export function ExistenciasExplorer({ initialData, kpis }: { initialData: FilaExistencia[]; kpis: Kpis }) {
+export function ExistenciasExplorer({
+  initialData,
+  initialCount,
+  pageSize,
+  kpis,
+}: {
+  initialData: FilaExistencia[];
+  initialCount: number;
+  pageSize: number;
+  kpis: Kpis;
+}) {
   const [filtro, setFiltro] = useState<Filtro>('todas');
   const [q, setQ] = useState('');
   const [data, setData] = useState(initialData);
+  const [count, setCount] = useState(initialCount);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  const buscar = useCallback(async (f: Filtro) => {
+  // q busca por código/nombre/SKU en el servidor (antes filtraba en
+  // memoria sólo dentro de las filas ya cargadas — con paginación real esa
+  // búsqueda dejaría de encontrar nada fuera de la página actual).
+  const buscar = useCallback(async (f: Filtro, texto: string, p: number) => {
     setLoading(true);
     const params = new URLSearchParams();
     if (f !== 'todas') params.set('filtro', f);
+    if (texto.trim()) params.set('q', texto.trim());
+    params.set('page', String(p));
     const res = await fetch(`/api/inventario/existencias?${params.toString()}`);
     const json = await res.json();
-    if (res.ok) setData(json.data ?? []);
+    if (res.ok) {
+      setData(json.data ?? []);
+      setCount(json.count ?? 0);
+      setPage(p);
+    }
     setLoading(false);
   }, []);
 
   const aplicarFiltro = (f: Filtro) => {
     setFiltro(f);
-    void buscar(f);
+    void buscar(f, q, 1);
   };
 
-  const filtrados = q.trim()
-    ? data.filter((e) => {
-        const texto = `${e.productos?.codigo_interno ?? ''} ${e.productos?.nombre ?? ''} ${e.productos?.sku ?? ''}`.toLowerCase();
-        return texto.includes(q.trim().toLowerCase());
-      })
-    : data;
+  const cambiarPagina = (nueva: number) => {
+    void buscar(filtro, q, nueva);
+  };
+
+  // Debounce de 300ms: cada tecla no dispara un round-trip, sólo la pausa.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBuscarTexto = (texto: string) => {
+    setQ(texto);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => void buscar(filtro, texto, 1), 300);
+  };
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  const totalPages = Math.max(1, Math.ceil(count / pageSize));
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -123,7 +154,7 @@ export function ExistenciasExplorer({ initialData, kpis }: { initialData: FilaEx
             <input
               placeholder="Buscar por código, nombre o SKU..."
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => onBuscarTexto(e.target.value)}
               className="w-full pl-10 text-sm border border-border rounded-lg px-3 py-2"
             />
           </div>
@@ -146,7 +177,7 @@ export function ExistenciasExplorer({ initialData, kpis }: { initialData: FilaEx
               </tr>
             </thead>
             <tbody>
-              {filtrados.map((e, i) => (
+              {data.map((e, i) => (
                 <tr key={e.id} className={`border-b border-border/50 ${i % 2 === 1 ? 'bg-rtb-surface/40' : ''}`}>
                   <td className="py-3 px-4">
                     <p className="text-sm font-medium text-rtb-navy">{e.productos?.nombre ?? '—'}</p>
@@ -175,7 +206,7 @@ export function ExistenciasExplorer({ initialData, kpis }: { initialData: FilaEx
                   </td>
                 </tr>
               ))}
-              {filtrados.length === 0 && (
+              {data.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-10 text-center text-muted-foreground text-sm">
                     Sin existencias que coincidan con el filtro.
@@ -184,6 +215,21 @@ export function ExistenciasExplorer({ initialData, kpis }: { initialData: FilaEx
               )}
             </tbody>
           </table>
+        )}
+        {!loading && count > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border/50 text-xs text-muted-foreground">
+            <span>
+              Mostrando {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, count)} de {count}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => cambiarPagina(page - 1)}>
+                Anterior
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => cambiarPagina(page + 1)}>
+                Siguiente
+              </Button>
+            </div>
+          </div>
         )}
       </div>
     </div>

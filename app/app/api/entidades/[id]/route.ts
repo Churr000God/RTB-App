@@ -97,10 +97,16 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     // incluyen nombre_legal/rfc (sólo super_admin llega hasta aquí con
     // eso), esas dos columnas no tienen GRANT UPDATE para authenticated
     // (ver 002_entidades_core.sql) y hace falta el cliente admin.
+    // B-01 (contexto/QA_INTEGRAL_2026-08-06.md): sin .select(), una entidad
+    // fuera de RLS devolvía 200 sin editarse — riesgo real aquí porque el
+    // camino con el cliente del propio usuario sí pasa por RLS.
     const client = sensiblesEnviados.length > 0 ? createSupabaseAdminClient() : createSupabaseServerClient();
-    const { error } = await client.from('entidades').update(parsed.data).eq('id', params.id);
+    const { data, error } = await client.from('entidades').update(parsed.data).eq('id', params.id).select('id');
     if (error) {
       return NextResponse.json({ error: mensajeDuplicadoEntidad(error.message) ?? error.message }, { status: 400 });
+    }
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'No se pudo editar: la entidad no existe o no tienes permiso.' }, { status: 403 });
     }
 
     return NextResponse.json({ success: true });

@@ -312,6 +312,63 @@ corrigió).
   activar los tokens de Mapbox (024) — cualquier variable nueva en
   `app/.env` durante una sesión de desarrollo larga necesita este mismo
   paso, no sólo guardar el archivo.
+- **`.update(...)` de supabase-js sin `.select()` no distingue "0 filas
+  por RLS" de "1 fila actualizada" — ambas dan `error === null`.** Sin
+  `.select()`, supabase-js manda `Prefer: return=minimal` y PostgREST
+  responde `204` tanto si el `UPDATE` afectó una fila como si el `USING`
+  de la política RLS filtró la fila en silencio (a diferencia de
+  `WITH CHECK`, que sí lanza `42501`). Causa raíz real de B-01
+  (`contexto/QA_INTEGRAL_2026-08-06.md`): un clic real en una transición
+  de estado devolvía `200 {"success":true}` sin persistir nada. El fix
+  es el patrón que ya usaba `conteos/[id]/detalles/[detalleId]/route.ts`
+  antes de que el resto del código lo copiara: pedir `.select('id')` y
+  comprobar `data.length > 0`. Se corrigió en 19 rutas el 2026-08-07 —
+  antes de escribir un nuevo `.update()`, comprobar si el caller puede
+  legítimamente no matchear ninguna fila (RLS de rol, de fila, o un ID de
+  otra entidad) y, si puede, aplicar el mismo patrón.
+- **Un trigger genérico que asume una columna (`updated_by`) puede romper
+  una tabla que no la tiene, en silencio si nadie mira el `error`.**
+  `set_updated_meta()` (compartida por `clientes`/`productos`/`entidades`/
+  etc., todas con `updated_by`) se dio de alta también en
+  `inventario_ajuste_lineas` (013), que por diseño **no** rastrea autoría
+  por línea — esa vive en el ajuste padre (`solicitante_id`/
+  `autorizador_id`/`aplicado_por`). Cada `UPDATE` a esa tabla fallaba con
+  `record "new" has no field "updated_by"` desde el primer día, incluido
+  el que enlaza `movimiento_id` al aplicar un ajuste — enmascarado porque
+  ese `UPDATE` en particular no capturaba su propio `error` (mismo patrón
+  que B-01, ver arriba). Corregido en `026` con un trigger dedicado que
+  sólo toca `updated_at`. Antes de reutilizar un trigger "genérico" en una
+  tabla nueva: verificar que tiene *todas* las columnas que ese trigger
+  escribe, no asumirlo por el nombre de la función.
+- **Un `for`-loop de llamadas HTTP/SDK sueltas contra una tabla
+  append-only NO es atómico, aunque cada paso individual maneje su
+  `error`.** `POST /api/inventario/ajustes/[id]/aplicar` insertaba un
+  `inventario_movimientos` por línea y luego enlazaba `movimiento_id` con
+  un `UPDATE` aparte — dos llamadas separadas, sin transacción. Cuando la
+  segunda fallaba (el bug de arriba), el movimiento ya insertado quedaba
+  **irreversible** (`inventario_movimientos_no_update`, 011) pero sin
+  enlazar; un reintento del usuario —reacción normal ante un error—
+  volvía a procesar la misma línea (el filtro `movimiento_id is null`
+  seguía viendo `null`) y duplicaba el movimiento de kardex. Encontrado
+  verificando el circuito de `025` en la app real, sobre datos de QA
+  (`db/migrations/027_ajuste_aplicar_atomico.sql`), corregido antes de
+  que hubiera datos reales en riesgo. Regla general: cualquier operación
+  que escriba en `inventario_movimientos` (append-only, irreversible) y
+  necesite más de un `INSERT`/`UPDATE` relacionado debe ser una función
+  `SECURITY DEFINER` de una sola transacción — nunca una secuencia de
+  llamadas sueltas desde la ruta HTTP, sin importar cuán bien manejada
+  esté cada una por separado.
+- **`dis_ajuste_chk` (`inventario_discrepancias`) es una equivalencia, no
+  una implicación — la liga a un ajuste va en el sentido que no es obvio.**
+  `(salida in ('aju','aju_sin_soporte')) = (ajuste_id is not null)`: poner
+  `ajuste_id` en una discrepancia sin `salida='aju'` viola el `CHECK`, y
+  poner `salida='aju'` exige además `banda` + `causa_presunta` no vacíos
+  (`dis_causa_chk`) — precisamente el juicio humano que un proceso
+  automático no debe suplantar. Cuando un flujo automático (como el
+  puente `025`) necesita relacionar una discrepancia con un ajuste sin
+  clasificarla todavía, la liga va por el lado que no tiene `CHECK`:
+  `inventario_ajuste_lineas.discrepancia_id`, no
+  `inventario_discrepancias.ajuste_id`.
 
 ## Historial de decisiones
 
@@ -562,15 +619,82 @@ corrigió).
   índice único — bloque que nunca se había probado así), edición real de
   datos generales de entidad, CLABE enmascarada para `direccion`, y
   permisos negativos por API en los 5 roles restantes.
+- **2026-08-07** — Corrección de B-00 y B-01
+  (`contexto/QA_INTEGRAL_2026-08-06.md`) + optimizaciones. B-00 no era el
+  bug que parecía: el diseño "`cantidad_fisica` sin tocar el teórico" es
+  intencional (CIE-DIS-01, "una diferencia sin causa identificada no se
+  ajusta"), codificado en tres capas del esquema (`mov_ajuste_chk`,
+  `ajuste_autorizado()`, `aju_no_autoaprobacion_chk`) que ya existían desde
+  RTB-INV-01. Lo que faltaba de verdad era el puente entre "conteo
+  aplicado" y "ajuste autorizado" — el usuario tenía que capturar cada
+  discrepancia y cada línea de ajuste a mano. Migración
+  `025_conteo_puente_ajuste.sql`: `inventario_conteo_generar_ajuste()`
+  (nueva, también sirve de backfill sobre los 3 conteos QA ya `aplicado`
+  de la campaña anterior — se corrió sobre ellos en esta misma sesión) +
+  `inventario_aplicar_conteo()` reescrita (cambia de `integer` a `jsonb`,
+  exigió `drop function`). Verificado por SQL simulando rol real
+  (camino feliz, idempotencia, permisos negativos, conteo sin diferencias,
+  invariante de `inventario_verificar_consistencia()`) y clic a clic con
+  dos usuarios distintos (`direccion` aplica, `super_admin` autoriza —
+  conteo de prueba `CNT-000023`).
+
+  Ese mismo circuito real destapó **dos bugs adicionales preexistentes**,
+  ninguno documentado antes: (a) el trigger `before_update_ajuste_lineas`
+  usaba la función genérica `set_updated_meta()`, que escribe
+  `updated_by` — columna que `inventario_ajuste_lineas` nunca tuvo por
+  diseño; todo `UPDATE` a esa tabla fallaba desde el primer día
+  (`026_ajuste_lineas_trigger_fix.sql`); (b) `POST /ajustes/[id]/aplicar`
+  no era atómico (for-loop de `INSERT`+`UPDATE` sueltos con
+  `service_role`), así que el fallo de (a) —antes silencioso porque ese
+  `UPDATE` en particular no capturaba su `error`— dejaba movimientos de
+  kardex ya insertados (append-only, irreversibles) sin enlazar, y un
+  reintento los duplicaba; se confirmó en vivo sobre datos de QA (dos
+  `salida_ajuste` de -10 duplicados sobre "QA Producto de Prueba A") antes
+  de corregirlo con una función atómica de una sola transacción
+  (`027_ajuste_aplicar_atomico.sql`) y compensarlo con un ajuste
+  correctivo real, autorizado por otra persona, mismo flujo de siempre.
+  Ambos bugs solo salieron a la luz porque la corrección de B-01 (ver
+  abajo) empezó a capturar errores que antes se ignoraban — confirma la
+  regla ya documentada en Gotchas sobre por qué `.update()` sin
+  `.select()` esconde fallos reales.
+
+  B-01 (una transición de estado devolvía `200` sin persistir) se
+  confirmó real y se corrigió en las 19 rutas del repo con el mismo
+  patrón (`estado/route.ts` y otras 18, ver Gotchas) — un clic real en la
+  app, con `CNT-000023`, mostró la transición persistiendo en un solo
+  intento tras el fix.
+
+  **Optimizaciones** (mismo alcance pedido por el dueño del proyecto,
+  misma sesión): purgados 34 componentes `ui/` sin importar en ningún
+  lado (verificado archivo por archivo, no por suposición) y ~30
+  dependencias que sólo esos componentes usaban (`plotly.js`,
+  `maplibre-gl`, `recharts`, `react-hook-form`, todo el clúster
+  `toast`/`toaster` de Radix — la app usa `sonner`, no ese) —
+  `node_modules` pasó de 716 a 353 paquetes; lockfile regenerado dentro de
+  `node:20-alpine` (gotcha ya documentado). Stage `runner` del Dockerfile,
+  escrito desde el módulo de mapas (024) pero nunca construido, ya
+  funciona: `ARG`/`ENV` de `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` en el
+  stage `builder` (cierra el gotcha "pendiente de reportar aparte" que ya
+  documentaba este archivo) + `HOSTNAME=0.0.0.0`/`PORT=3000` en el
+  runner + servicio `web-prod` nuevo en `docker-compose.yml` bajo
+  `profiles: ['prod']`. Verificado real: `Ready in 42ms` (vs. los 1.9 s de
+  arranque en frío de `next dev`), 31.8 MiB en reposo (vs. ~1 GiB de
+  `next dev` tras compilar rutas), TTFB de 28 ms en `/login` (vs. 2–2.8 s
+  medidos en la campaña anterior sobre `next dev`) — el caveat que esa
+  campaña dejó pendiente ("no comparable a producción real") ya tiene
+  número real. `next.config.js` con `experimental.optimizePackageImports`
+  para `lucide-react`, `browserslist` sin `ie >= 11`, script `typecheck`
+  nuevo. Paginación real (`page`, `.range()`, mismo patrón que
+  `/api/entidades`) en hallazgos, solicitudes de cambio y existencias —
+  este último además movió la búsqueda de texto de en-memoria a
+  server-side (antes sólo buscaba dentro de las 500 filas ya cargadas).
+  `/dashboard/admin/users` se dejó **fuera** a propósito, documentado como
+  excepción en TODO: gestiona empleados internos de RTB, un techo real de
+  decenas — paginarla habría arriesgado el filtro/búsqueda que ya
+  funciona sin resolver ningún problema de escala real.
 
 ## TODO
 
-- **RTB-INV-01 — "Aplicar al inventario" no corrige `cantidad_teorica`.**
-  Máxima prioridad, hallazgo B-00 de `contexto/QA_INTEGRAL_2026-08-06.md`.
-  `inventario_aplicar_conteo()` necesita generar movimientos de kardex reales
-  (o el dueño del proyecto decide explícitamente que el diseño actual —
-  `cantidad_fisica` sin kardex — es el deseado, pero hoy el botón y el
-  estado "Aplicado" comunican lo contrario).
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está
@@ -581,3 +705,26 @@ corrigió).
   sembró 6 unidades de medida y 10 familias para desbloquear el alta de
   producto — pero sigue sin los productos en sí; eso es lo que queda
   pendiente aquí.
+- **Clasificar las discrepancias que 025 dejó abiertas.** El puente
+  conteo→ajuste genera el ajuste borrador sin exigir que sus discrepancias
+  ya tengan causa/banda — `POST /ajustes/[id]/enviar` no lo comprueba hoy,
+  así que un ajuste generado automáticamente se puede enviar y autorizar
+  sin que nadie haya clasificado nada. `dis_causa_chk` sigue impidiendo
+  marcar `salida='aju'` sin causa (eso no cambió), pero nada obliga a
+  hacerlo antes de autorizar el ajuste que sí mueve el kardex. Candidato:
+  contar discrepancias `'abierta'` del mismo `conteo_id` en `/enviar`.
+- **`next@14.2.28` tiene una vulnerabilidad de seguridad conocida**
+  (aviso de `npm install` visto en la sesión de 2026-08-07: "This version
+  has a security vulnerability. Please upgrade to a patched version",
+  https://nextjs.org/blog/security-update-2025-12-11). No se actualizó en
+  esa sesión — un salto de versión de Next exige su propia verificación
+  (rutas, middleware, build) y no es un cambio mecánico para mezclar con
+  otro trabajo.
+- **Migrar `/dashboard/admin/users` a paginación real es una excepción
+  deliberada, no un pendiente.** A diferencia de hallazgos/solicitudes/
+  existencias (que sí se paginaron en la sesión de 2026-08-07), esta
+  pantalla administra empleados internos de RTB — un techo real de
+  decenas, nunca miles. Convertirla arriesgaría romper el filtro/búsqueda
+  en memoria que ya funciona sin resolver ningún problema de escala real.
+  Revisar sólo si el criterio de acceso cambiara (p.ej. autoservicio de
+  cuentas para terceros).

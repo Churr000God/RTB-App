@@ -20,10 +20,22 @@ CMD ["npm", "run", "dev"]
 
 # ---------------------------------------------------------------------------
 # builder — compila el standalone build de producción
+#
+# NEXT_PUBLIC_* se inlinan en el bundle de cliente en BUILD TIME, no en
+# runtime (Next.js) — sin estos dos ARG/ENV, cualquier process.env.NEXT_PUBLIC_*
+# leído desde código 'use client' queda `undefined` en el bundle final, y
+# lib/supabase/client.ts lo enmascara con `?? ''` (login roto en silencio,
+# gotcha ya documentado en CLAUDE.md). .dockerignore excluye los .env del
+# contexto a propósito — estos valores llegan como --build-arg, nunca
+# copiando el archivo.
 # ---------------------------------------------------------------------------
 FROM node:20-alpine AS builder
 WORKDIR /app
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_OUTPUT_MODE=standalone
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 COPY --from=deps /app/node_modules ./node_modules
 COPY app/ .
 RUN npm run build
@@ -34,6 +46,10 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# server.js (standalone) escucha en HOSTNAME:PORT — sin HOSTNAME=0.0.0.0
+# puede quedarse en localhost y no responder al puerto publicado por Docker.
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
 RUN addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs

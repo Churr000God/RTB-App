@@ -137,16 +137,31 @@ DEFINER` con el cliente del propio usuario, no `service_role`; corrección
 de E-03/E-04): un `UPDATE ... FROM` set-based que copia `cantidad_fisica`
 a `inventario_existencias` para cada línea con una medición válida. **No
 ajusta el teórico** — "una diferencia sin causa identificada no se
-ajusta: se declara como hallazgo" (Registro de Discrepancias real). Ajustar
-el teórico exige un `inventario_ajustes` autorizado aparte, ver
-`db/procesos/discrepancias-y-ajustes.md`. El chequeo de rol
-(`super_admin`/`direccion`) vive en la propia función, no sólo en la
-ruta — así ningún otro camino HTTP puede evadirlo (antes, el botón
-genérico de transición de estado permitía a `almacen` "aplicar" sin pasar
-por esta ruta). Al terminar, un trigger `AFTER UPDATE` libera
+ajusta: se declara como hallazgo" (Registro de Discrepancias real). El
+chequeo de rol (`super_admin`/`direccion`) vive en la propia función, no
+sólo en la ruta — así ningún otro camino HTTP puede evadirlo (antes, el
+botón genérico de transición de estado permitía a `almacen` "aplicar" sin
+pasar por esta ruta). Al terminar, un trigger `AFTER UPDATE` libera
 automáticamente cualquier congelamiento que siga activo sobre ese
 conteo — un conteo aplicado ya no tiene motivo para seguir bloqueando el
 kardex.
+
+**El puente (`025`, hallazgo B-00).** Antes de marcar el conteo como
+`aplicado`, la función llama a `inventario_conteo_generar_ajuste()`, que
+deja armado —no aplicado— el expediente de cada diferencia: una
+`inventario_discrepancias` por línea con diferencia real (`abierta`, sin
+causa ni salida — eso sigue siendo juicio humano) y UN
+`inventario_ajustes` en `borrador` con sus líneas, ligadas a su
+discrepancia por `inventario_ajuste_lineas.discrepancia_id`. Antes de este
+cambio el usuario veía "Aplicado" y tenía que capturar cada discrepancia y
+cada línea de ajuste a mano; ahora sólo tiene que clasificar la causa y
+enviarlo a autorización. El teórico sigue sin cambiar aquí — cambia cuando
+ese ajuste se envíe, lo autorice **otra persona**
+(`aju_no_autoaprobacion_chk`) y se aplique al kardex (ver
+`db/procesos/discrepancias-y-ajustes.md`). Una línea `ubicacion_incorrecta`
+genera su discrepancia pero **no** entra al ajuste (Paso 0 · Reubicación —
+un ajuste de cantidad ahí corregiría el número mintiendo sobre dónde está
+la pieza).
 
 ## Qué puede fallar
 

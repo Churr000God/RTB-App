@@ -41,8 +41,13 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       limite_credito > UMBRAL_APROBACION_CREDITO && !ejecutaDirecto('limite_credito', auth.profile.role);
 
     if (!requiereAprobacion) {
-      const { error } = await supabase.from('clientes').update({ limite_credito }).eq('id', cliente.id);
+      // B-01 (contexto/QA_INTEGRAL_2026-08-06.md): sin .select(), un
+      // cliente fuera de RLS devolvía 200 "aplicado" sin cambiar nada.
+      const { data, error } = await supabase.from('clientes').update({ limite_credito }).eq('id', cliente.id).select('id');
       if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (!data || data.length === 0) {
+        return NextResponse.json({ error: 'No se pudo actualizar el límite: sin permiso sobre este cliente.' }, { status: 403 });
+      }
       return NextResponse.json({ success: true, pendiente: false, limiteCredito: limite_credito });
     }
 

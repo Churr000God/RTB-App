@@ -6,7 +6,10 @@ import { requireApiRole } from '@/lib/supabase/guards';
 import { REGLAS_APROBACION, type CambioControlado } from '@/lib/entidades/permisos';
 import { solicitudCambioCreateSchema } from '@/lib/entidades/schemas';
 
-// GET - listado. RLS decide: el solicitante ve las suyas, direccion/super_admin ven todas.
+const PAGE_SIZE = 20;
+
+// GET - listado paginado (mismo patrón que /api/entidades). RLS decide: el
+// solicitante ve las suyas, direccion/super_admin ven todas.
 // Gap de UI (contexto/AUDITORIA_QA_ROLES_2026-08-06.md §4): no había
 // ninguna pantalla para ver/resolver solicitudes — POST .../resolver ya
 // existía y respondía. `registro_id` es polimórfico (entidades/clientes/
@@ -19,12 +22,19 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const estado = searchParams.get('estado');
+    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
+    const from = (page - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
 
     const supabase = createSupabaseServerClient();
-    let query = supabase.from('solicitudes_cambio').select('*').order('created_at', { ascending: false });
+    let query = supabase
+      .from('solicitudes_cambio')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
     if (estado) query = query.eq('estado', estado);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     const filas = data ?? [];
@@ -52,7 +62,7 @@ export async function GET(request: Request) {
       return { ...s, entidad_nombre: entidadId ? nombrePorEntidad.get(entidadId) ?? null : null };
     });
 
-    return NextResponse.json({ data: enriquecidas });
+    return NextResponse.json({ data: enriquecidas, count: count ?? 0, page, pageSize: PAGE_SIZE });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

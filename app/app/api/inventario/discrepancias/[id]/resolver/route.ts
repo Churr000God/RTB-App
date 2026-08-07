@@ -11,6 +11,8 @@ import { discrepanciaResolverSchema } from '@/lib/inventario/schemas';
 // sin causa identificada no se ajusta, se declara como hallazgo" — este
 // endpoint sólo traduce esa excepción a un mensaje si el zod no la atrapó
 // antes del round-trip.
+// B-01 (contexto/QA_INTEGRAL_2026-08-06.md): sin .select(), una discrepancia
+// fuera de RLS devolvía 200 sin clasificarse.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const { response } = await requireApiRole(['super_admin', 'direccion', 'almacen', 'compras']);
@@ -22,7 +24,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const supabase = createSupabaseServerClient();
-    const { error } = await supabase.from('inventario_discrepancias').update(parsed.data).eq('id', params.id);
+    const { data, error } = await supabase
+      .from('inventario_discrepancias')
+      .update(parsed.data)
+      .eq('id', params.id)
+      .select('id');
     if (error) {
       const sinCausa = /dis_causa_chk/i.test(error.message);
       return NextResponse.json(
@@ -33,6 +39,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
         },
         { status: 400 }
       );
+    }
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'No se pudo resolver: la discrepancia no existe o no tienes permiso.' }, { status: 403 });
     }
 
     return NextResponse.json({ success: true });

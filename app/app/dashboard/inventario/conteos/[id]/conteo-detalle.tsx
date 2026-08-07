@@ -11,6 +11,7 @@ import { MotivoDialog } from '@/components/inventario/motivo-dialog';
 import { CONTEO_ESTADO_LABELS, CONTEO_LINEA_ESTADO_LABELS, CONTEO_TRANSICIONES, FIRMA_ROL_LABELS } from '@/lib/inventario/config';
 import { ROLES_FIRMAN_SUPERVISION } from '@/lib/inventario/permisos';
 import type {
+  ConteoAplicarResultado,
   ConteoConciliacionFila,
   InventarioConteo,
   InventarioConteoAsignacion,
@@ -22,8 +23,10 @@ import type {
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
   ClipboardCheck,
+  FileEdit,
   Loader2,
   Lock,
   PenLine,
@@ -79,6 +82,7 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
   const [familias, setFamilias] = useState<OpcionAlcance[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resultado, setResultado] = useState<ConteoAplicarResultado | null>(null);
 
   // M-01 (contexto/AUDITORIA_QA_ROLES_2026-08-06.md): "Asignar capturista"
   // usaba window.prompt pidiendo pegar un UUID a mano. Al reemplazarlo se
@@ -153,10 +157,29 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
 
   const congelar = () => void accion(`/api/inventario/conteos/${conteo.id}/congelar`).then(() => cargarCongelamientos());
   const transicionar = (estado: string) => void accion(`/api/inventario/conteos/${conteo.id}/estado`, { estado });
-  // 'aplicado'/'cancelado' liberan solos el congelamiento
-  // (after_update_conteos_liberar, 016) — refrescar la lista para que se
-  // vea de inmediato, no sólo tras el próximo mount.
-  const aplicar = () => void accion(`/api/inventario/conteos/${conteo.id}/aplicar`).then(() => cargarCongelamientos());
+  // 025: aplicar ya no sólo copia el físico — deja armado el expediente
+  // (una discrepancia abierta por diferencia) y la propuesta (un ajuste en
+  // borrador con sus líneas). accion() descarta la respuesta y no muestra
+  // nada al terminar, así que esto va con fetch propio (mismo patrón que
+  // liberar()): sin feedback, el usuario no tiene forma de saber que hay
+  // un ajuste esperándolo ni de llegar a él. 'aplicado' libera solo el
+  // congelamiento (after_update_conteos_liberar, 016) — refrescar la
+  // lista para que se vea de inmediato, no sólo tras el próximo mount.
+  const aplicar = async () => {
+    setError(null);
+    setResultado(null);
+    setLoading(true);
+    const res = await fetch(`/api/inventario/conteos/${conteo.id}/aplicar`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    setLoading(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo aplicar el conteo.');
+      return;
+    }
+    setResultado(data as ConteoAplicarResultado);
+    void cargarCongelamientos();
+    router.refresh();
+  };
   const cancelar = (motivo: string) =>
     accion(`/api/inventario/conteos/${conteo.id}/estado`, { estado: 'cancelado', motivo_cancelacion: motivo }).then((ok) => {
       void cargarCongelamientos();
@@ -267,7 +290,7 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
             </Button>
           )}
           {conteo.estado === 'cerrado' && puedeAplicar && (
-            <Button onClick={aplicar} disabled={loading} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            <Button onClick={() => void aplicar()} disabled={loading} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
               <CheckCircle2 className="w-4 h-4 mr-2" /> Aplicar al inventario
             </Button>
           )}
@@ -294,6 +317,82 @@ export function ConteoDetalle({ conteo, asignacionesIniciales, firmasIniciales, 
         <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {resultado && (
+        <div className="bg-white rounded-xl p-5 border-l-4 border-l-rtb-teal space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="w-5 h-5 text-rtb-teal shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-display font-semibold text-rtb-navy">
+                Conteo {resultado.conteoFolio ?? conteo.folio} aplicado
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Se registró la medición física y quedó armado el expediente de las diferencias.
+              </p>
+            </div>
+          </div>
+
+          <ul className="text-sm space-y-1.5 pl-7">
+            <li className="flex items-baseline gap-2">
+              <span className="tabular-nums font-semibold text-rtb-navy">{resultado.existenciasActualizadas}</span>
+              <span className="text-muted-foreground">
+                {resultado.existenciasActualizadas === 1 ? 'existencia actualizada' : 'existencias actualizadas'} con la cantidad física medida
+              </span>
+            </li>
+            <li className="flex items-baseline gap-2">
+              <span className="tabular-nums font-semibold text-rtb-navy">{resultado.discrepanciasGeneradas}</span>
+              <span className="text-muted-foreground">
+                {resultado.discrepanciasGeneradas === 1 ? 'discrepancia abierta' : 'discrepancias abiertas'} — cada una espera causa presunta y banda
+              </span>
+            </li>
+            {resultado.discrepanciasReubicacion > 0 && (
+              <li className="flex items-baseline gap-2">
+                <span className="tabular-nums font-semibold text-accent">{resultado.discrepanciasReubicacion}</span>
+                <span className="text-muted-foreground">
+                  de ubicación incorrecta (Paso 0 · Reubicación): no entran al ajuste, hay que emparejarlas
+                </span>
+              </li>
+            )}
+            {resultado.ajusteFolio ? (
+              <li className="flex items-baseline gap-2">
+                <span className="tabular-nums font-semibold text-rtb-navy">{resultado.lineasAjuste}</span>
+                <span className="text-muted-foreground">
+                  {resultado.lineasAjuste === 1 ? 'línea' : 'líneas'} en el ajuste borrador{' '}
+                  <span className="tabular-nums font-medium text-rtb-navy">{resultado.ajusteFolio}</span>
+                </span>
+              </li>
+            ) : (
+              <li className="text-muted-foreground">Sin diferencias que ajustar — no se creó ningún ajuste.</li>
+            )}
+          </ul>
+
+          <div className="flex items-start gap-2 p-3 bg-rtb-surface rounded-lg text-xs text-rtb-navy/80">
+            <AlertCircle className="w-4 h-4 shrink-0 text-accent mt-0.5" />
+            <p>
+              <strong className="font-semibold">El inventario teórico todavía no cambió.</strong>{' '}
+              {resultado.ajusteFolio ? (
+                <>
+                  Se corrige cuando el ajuste {resultado.ajusteFolio} se envíe a autorización, lo autorice{' '}
+                  <em>otra persona</em> y se aplique — ese es el único camino que genera movimientos de kardex.
+                  Antes de enviarlo, clasifica la causa de cada discrepancia: una diferencia sin causa
+                  identificada no se ajusta, se declara como hallazgo (CIE-DIS-01).
+                </>
+              ) : (
+                <>El físico medido coincide con el teórico en todas las líneas aplicadas.</>
+              )}
+            </p>
+          </div>
+
+          {resultado.ajusteId && (
+            <Button asChild className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+              <Link href={`/dashboard/inventario/ajustes/${resultado.ajusteId}`}>
+                <FileEdit className="w-4 h-4 mr-2" /> Abrir ajuste {resultado.ajusteFolio}
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Link>
+            </Button>
+          )}
         </div>
       )}
 

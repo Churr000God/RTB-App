@@ -13,26 +13,35 @@ import { AlertCircle, ClipboardList, Loader2, Plus, X } from 'lucide-react';
 // /api/inventario/hallazgos existían y respondían, pero no había ninguna
 // pantalla — un hallazgo abierto (que sobrevive al cierre del conteo que
 // lo originó, 013_inventario_discrepancias_ajustes.sql) era invisible.
+const PAGE_SIZE = 20;
+
 export default function HallazgosPage() {
   const { role } = useAuth();
   const [data, setData] = useState<InventarioHallazgo[]>([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [creando, setCreando] = useState(false);
   const [cerrando, setCerrando] = useState<InventarioHallazgo | null>(null);
 
-  const cargar = useCallback(async () => {
+  const cargar = useCallback(async (p: number = page) => {
     setLoading(true);
-    const res = await fetch('/api/inventario/hallazgos');
+    const res = await fetch(`/api/inventario/hallazgos?page=${p}`);
     const data = await res.json().catch(() => ({}));
     setData(data.data ?? []);
+    setCount(data.count ?? 0);
+    setPage(p);
     setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    void cargar();
-  }, [cargar]);
+    void cargar(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const puedeEscribir = puede(role, 'hallazgos', 'insert');
+  const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -100,6 +109,21 @@ export default function HallazgosPage() {
             </tbody>
           </table>
         )}
+        {!loading && count > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border/50 text-xs text-muted-foreground">
+            <span>
+              Mostrando {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, count)} de {count}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => void cargar(page - 1)}>
+                Anterior
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => void cargar(page + 1)}>
+                Siguiente
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {creando && (
@@ -107,7 +131,7 @@ export default function HallazgosPage() {
           onClose={() => setCreando(false)}
           onCreado={() => {
             setCreando(false);
-            void cargar();
+            void cargar(1);
           }}
         />
       )}
@@ -117,7 +141,7 @@ export default function HallazgosPage() {
           onClose={() => setCerrando(null)}
           onCerrado={() => {
             setCerrando(null);
-            void cargar();
+            void cargar(page);
           }}
         />
       )}

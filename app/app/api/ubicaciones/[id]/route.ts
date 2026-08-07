@@ -26,8 +26,10 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     // trigger lo congela y el GRANT no lo cubre, así que nunca se manda.
     const { tipo: _tipo, ...cambios } = parsed.data;
 
+    // B-01 (contexto/QA_INTEGRAL_2026-08-06.md): sin .select(), una
+    // ubicación fuera de RLS devolvía 200 sin editarse.
     const supabase = createSupabaseServerClient();
-    const { error } = await supabase.from('ubicaciones_internas').update(cambios).eq('id', params.id);
+    const { data, error } = await supabase.from('ubicaciones_internas').update(cambios).eq('id', params.id).select('id');
     if (error) {
       const sinPermiso = /42501|no tiene permiso/i.test(error.message);
       return NextResponse.json(
@@ -38,6 +40,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         },
         { status: sinPermiso ? 403 : 400 }
       );
+    }
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'No se pudo editar: la ubicación no existe o no tienes permiso.' }, { status: 403 });
     }
 
     return NextResponse.json({ success: true });

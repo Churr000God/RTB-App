@@ -15,9 +15,13 @@ type Fila = SolicitudCambio & { entidad_nombre: string | null };
 // pudiera verla ni resolverla — POST .../resolver ya existía. Reservada
 // a super_admin/direccion (MATRIZ.solicitudes_cambio.select,
 // lib/entidades/permisos.ts); el sidebar sólo la muestra a esos roles.
+const PAGE_SIZE = 20;
+
 export default function SolicitudesPage() {
   const { role, user } = useAuth();
   const [data, setData] = useState<Fila[]>([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [filtro, setFiltro] = useState<SolicitudEstado>('pendiente');
   const [rechazando, setRechazando] = useState<Fila | null>(null);
@@ -25,17 +29,25 @@ export default function SolicitudesPage() {
   const [accionando, setAccionando] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const cargar = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/solicitudes-cambio?estado=${filtro}`);
-    const data = await res.json().catch(() => ({}));
-    setData(data.data ?? []);
-    setLoading(false);
-  }, [filtro]);
+  const cargar = useCallback(
+    async (p: number = 1) => {
+      setLoading(true);
+      const res = await fetch(`/api/solicitudes-cambio?estado=${filtro}&page=${p}`);
+      const data = await res.json().catch(() => ({}));
+      setData(data.data ?? []);
+      setCount(data.count ?? 0);
+      setPage(p);
+      setLoading(false);
+    },
+    [filtro]
+  );
 
   useEffect(() => {
-    void cargar();
-  }, [cargar]);
+    void cargar(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtro]);
+
+  const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
 
   const resolver = async (id: string, decision: 'aprobar' | 'rechazar', comentario_resolucion?: string) => {
     setError(null);
@@ -53,7 +65,7 @@ export default function SolicitudesPage() {
     }
     setRechazando(null);
     setComentario('');
-    void cargar();
+    void cargar(page);
   };
 
   if (role && role !== 'super_admin' && role !== 'direccion') {
@@ -137,6 +149,21 @@ export default function SolicitudesPage() {
               )}
             </tbody>
           </table>
+        )}
+        {!loading && count > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border/50 text-xs text-muted-foreground">
+            <span>
+              Mostrando {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, count)} de {count}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => void cargar(page - 1)}>
+                Anterior
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => void cargar(page + 1)}>
+                Siguiente
+              </Button>
+            </div>
+          </div>
         )}
       </div>
 

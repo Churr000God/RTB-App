@@ -655,3 +655,28 @@ export interface InventarioConsistenciaFila {
   referencia_id: string;
   detalle: string;
 }
+
+/** Retorno crudo (jsonb) de public.inventario_aplicar_conteo() — 025. El
+ *  puente conteo→discrepancias→ajuste borrador: NO indica que el teórico
+ *  ya haya cambiado, sólo que quedó armado el expediente y la propuesta. */
+export interface ConteoAplicarResultadoRpc {
+  existencias_actualizadas: number;
+  discrepancias_generadas: number;
+  discrepancias_reubicacion: number;
+  ajuste_id: string | null;
+  ajuste_folio: string | null;
+  lineas_ajuste: number;
+  conteo_folio: string | null;
+}
+
+/** Lo que devuelve POST /api/inventario/conteos/[id]/aplicar, ya en camelCase. */
+export interface ConteoAplicarResultado {
+  success: true;
+  existenciasActualizadas: number;
+  discrepanciasGeneradas: number;
+  discrepanciasReubicacion: number;
+  lineasAjuste: number;
+  ajusteId: string | null;
+  ajusteFolio: string | null;
+  conteoFolio: string | null;
+}

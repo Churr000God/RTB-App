@@ -13,3 +13,33 @@ services:
       - /app/node_modules
       - /app/.next
     restart: unless-stopped
+
+  # Build de producción real (target: runner, next build && next start vía
+  # server.js standalone) — el servicio `web` de arriba corre `next dev`,
+  # que compila cada ruta bajo demanda y no sirve para medir rendimiento
+  # real (ver contexto/QA_INTEGRAL_2026-08-06.md §4). Nunca arranca solo:
+  # requiere el perfil `prod` explícito, así docker compose up normal no
+  # intenta construir dos imágenes.
+  #
+  # NEXT_PUBLIC_SUPABASE_URL/ANON_KEY se inlinan en el bundle de cliente en
+  # BUILD TIME (gotcha ya documentado) — docker-compose no lee app/.env
+  # para sustituir `${VAR}` en `build.args` (sólo lee un .env en la raíz
+  # del proyecto, que este repo no usa), así que hay que exportarlas al
+  # shell antes de construir:
+  #
+  #   export $(grep -E '^NEXT_PUBLIC_SUPABASE_(URL|ANON_KEY)=' app/.env | xargs)
+  #   docker compose --profile prod up --build web-prod
+  web-prod:
+    profiles: ['prod']
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY
+    ports:
+      - '3001:3000'
+    env_file:
+      - ./app/.env
+    restart: unless-stopped

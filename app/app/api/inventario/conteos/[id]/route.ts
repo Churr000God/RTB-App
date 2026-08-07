@@ -45,6 +45,10 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 
 // PATCH - edición de metadatos (nombre/alcance_descripcion/fecha_programada/
 // supervisor_id) — nunca de estado, eso va por /estado.
+//
+// B-01 (contexto/QA_INTEGRAL_2026-08-06.md): mismo patrón que estado/route.ts
+// — un UPDATE sin .select() no distingue "0 filas por RLS" de "1 fila
+// actualizada"; ambos devuelven error=null.
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   try {
     const { response } = await requireApiRole(['super_admin', 'direccion', 'almacen']);
@@ -56,8 +60,11 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     }
 
     const supabase = createSupabaseServerClient();
-    const { error } = await supabase.from('inventario_conteos').update(parsed.data).eq('id', params.id);
+    const { data, error } = await supabase.from('inventario_conteos').update(parsed.data).eq('id', params.id).select('id');
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'No se pudo editar: el conteo no existe o no tienes permiso.' }, { status: 403 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

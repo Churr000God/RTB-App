@@ -32,6 +32,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
 }
 
 // PATCH - iniciar/finalizar una asignación propia.
+// B-01 (contexto/QA_INTEGRAL_2026-08-06.md): la RLS de update exige
+// asignado_a = auth.uid() (o super_admin/direccion) — sin .select() un
+// intento de finalizar la asignación de otro capturista devolvía 200 sin
+// tocar nada.
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   try {
     const { auth, response } = await requireApiRole(['super_admin', 'direccion', 'almacen']);
@@ -44,12 +48,16 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
     const supabase = createSupabaseServerClient();
     const payload = accion === 'iniciar' ? { iniciado_at: new Date().toISOString() } : { finalizado_at: new Date().toISOString() };
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('inventario_conteo_asignaciones')
       .update(payload)
       .eq('id', asignacionId)
-      .eq('conteo_id', params.id);
+      .eq('conteo_id', params.id)
+      .select('id');
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'No se pudo actualizar la asignación: no existe o no es tuya.' }, { status: 403 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

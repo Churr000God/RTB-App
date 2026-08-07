@@ -18,7 +18,7 @@ del día ya integrados en el mismo árbol de código.
 | Autenticación / sesiones por rol | 🟢 Los 8 usuarios QA activos, cuenta del dueño intacta |
 | Catálogos (marcas/familias/categorías/unidades) | 🟢 Alta, gobierno por rol, sin columna duplicada |
 | Conteos físicos — captura y firmas | 🟢 Congelar, vista ciega, captura, conciliación, firmas: todo funciona |
-| **Conteos físicos — "Aplicar al inventario"** | 🔴 **Roto de fondo — ver B-00** |
+| **Conteos físicos — "Aplicar al inventario"** | 🟢 **Corregido 2026-08-07 — ver B-00, `db/migrations/025_conteo_puente_ajuste.sql`** |
 | Ajustes de inventario (autorización + kardex) | 🟢 Segregación de funciones y guardrail de saldo negativo funcionan |
 | Discrepancias / Hallazgos / Redefiniciones | 🟢 Las 3 pantallas nuevas del día operan sin error |
 | Imágenes de producto (galería, principal, quitar) | 🟢 Ciclo completo sin el choque de índice único que motivó 022/023 |
@@ -26,7 +26,7 @@ del día ya integrados en el mismo árbol de código.
 | Mapa / geocodificación | 🟡 Funcional (hover, buscador, leyenda, navegación) — un dato de prueba con geografía inconsistente, sin repro de geocodificación en vivo |
 | Permisos por rol (8 roles) | 🟢 Denegaciones por API confirmadas en los 5 roles con smoke test |
 
-**El hallazgo que hay que resolver antes de dar por cerrado RTB-INV-01:**
+**El hallazgo que había que resolver antes de dar por cerrado RTB-INV-01 — corregido 2026-08-07:**
 
 **B-00 — "Aplicar al inventario" no corrige el inventario real.** El botón pasa el
 conteo a estado "Aplicado" y no da ningún error, pero `cantidad_teorica` (el número
@@ -56,7 +56,27 @@ Compras y Almacén. Detalle completo en §2.
 
 ## 2. Hallazgos
 
-### B-00 (S1 — crítico) — "Aplicar al inventario" no actualiza `cantidad_teorica`
+### B-00 (S1 — crítico) — "Aplicar al inventario" no actualiza `cantidad_teorica` — ✅ CORREGIDO 2026-08-07
+
+> **Actualización 2026-08-07:** el diagnóstico de este hallazgo describía
+> el bug como "no genera kardex", pero verificando a fondo antes de
+> corregir resultó que ese comportamiento es intencional (CIE-DIS-01,
+> "una diferencia sin causa identificada no se ajusta"), codificado en
+> `mov_ajuste_chk`/`ajuste_autorizado()`/`aju_no_autoaprobacion_chk` desde
+> el propio RTB-INV-01. El bug real era que faltaba el puente entre
+> "conteo aplicado" y "ajuste autorizado" — el usuario tenía que capturar
+> cada discrepancia y cada línea de ajuste a mano. Corregido con
+> `db/migrations/025_conteo_puente_ajuste.sql`: al aplicar, se genera
+> automáticamente una discrepancia por diferencia y un ajuste borrador con
+> sus líneas; el teórico sigue sin cambiar hasta que ese ajuste se envíe,
+> lo autorice otra persona y se aplique. Verificado por SQL (rol
+> simulado) y clic a clic con dos usuarios reales
+> (`sessions/2026-08-07-correccion-qa-b00-b01-optimizaciones.md`). El
+> mismo circuito de verificación destapó dos bugs adicionales
+> preexistentes sin relación con B-00 en sí (trigger de
+> `inventario_ajuste_lineas` con columna inexistente, y "Aplicar al
+> kardex" no atómico) — corregidos en `026`/`027`, ver CLAUDE.md.
+
 
 - **Repro**: conteo `CNT-000013` (QA2, tipo general), rol `almacen` crea → congela
   → asigna capturista → captura 8 y 3 piezas (vista ciega, físico real). Rol
@@ -98,7 +118,20 @@ Compras y Almacén. Detalle completo en §2.
   del dueño del proyecto antes de tocarse, no un parche de última hora al cierre de
   una campaña de QA. **Recomendado como el primer punto de la sesión de mañana.**
 
-### B-01 (S2, confianza media) — una transición de estado devolvió 200 sin persistir
+### B-01 (S2, confianza media) — una transición de estado devolvió 200 sin persistir — ✅ CORREGIDO 2026-08-07
+
+> **Actualización 2026-08-07:** confirmado real (no era flakiness de la
+> herramienta de automatización). Causa raíz: `estado/route.ts` hacía
+> `.update(...)` sin `.select()` — supabase-js manda
+> `Prefer: return=minimal`, así que PostgREST responde `204` tanto si el
+> `UPDATE` afectó una fila como si el `USING` de la política RLS filtró la
+> fila en silencio (`error === null` en ambos casos). Corregido con el
+> patrón `.select('id')` + `if (!data.length)` que ya usaban otras dos
+> rutas del repo, aplicado a las 19 rutas con el mismo patrón latente
+> (ver CLAUDE.md → Gotchas). Reproducido y confirmado corregido con un
+> clic real, sin herramientas de automatización de por medio, en
+> `sessions/2026-08-07-correccion-qa-b00-b01-optimizaciones.md`.
+
 
 - Conteo `CNT-000013`, rol `almacen`. Clic en "Pasar a En conciliación":
   `POST /estado` devolvió `200 {"success":true}`. Tras una recarga completa de la
@@ -251,13 +284,9 @@ Todo lo creado en esta campaña queda en estado terminal, sin bloquear nada:
 
 ## 6. Pendientes para la sesión de mañana (por prioridad)
 
-1. **B-00** — decidir e implementar cómo `inventario_aplicar_conteo()` debe
-   generar movimientos de kardex reales (o, alternativamente, documentar
-   explícitamente por qué `cantidad_fisica` sin kardex es el diseño deseado, si
-   así lo decide el dueño del proyecto — pero hoy el botón y el estado "Aplicado"
-   comunican lo contrario).
-2. **B-01** — reproducir sin herramientas de automatización de por medio y, si se
-   confirma, corregir la condición de carrera en `POST /estado`.
+1. ~~**B-00**~~ — **corregido 2026-08-07**, ver actualización en §2 y
+   `db/migrations/025_conteo_puente_ajuste.sql`.
+2. ~~**B-01**~~ — **corregido 2026-08-07**, ver actualización en §2.
 3. Geocodificación en vivo con sesión de rol real — bloque que sigue sin
    verificación clic a clic pese a esta campaña.
 4. Perfil de rendimiento completo (25 rutas × frío/caliente + latencia de API por

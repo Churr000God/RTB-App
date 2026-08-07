@@ -73,15 +73,29 @@ faltante no puede emparejarse con otro faltante.
 `direccion` que **no** sea el solicitante (comprobado en la API y de nuevo,
 estructuralmente, por `aju_no_autoaprobacion_chk`).
 
-`POST /api/inventario/ajustes/[id]/aplicar` genera un
+`POST /api/inventario/ajustes/[id]/aplicar` invoca
+`inventario_ajuste_aplicar()` (`027`, `SECURITY DEFINER` con el cliente del
+propio usuario — mismo patrón que congelar/aplicar un conteo): genera un
 `inventario_movimientos` (`entrada_ajuste`/`salida_ajuste`, con este
-`ajuste_id`) por cada línea, vía `service_role` — `ajuste_id` no está en el
-`GRANT INSERT` del kardex para `authenticated` bajo ninguna circunstancia.
-La propia inserción del movimiento vuelve a comprobar
-`ajuste_autorizado(ajuste_id)` dentro del trigger del kardex: aunque este
-endpoint tuviera un bug, Postgres exige de nuevo que el ajuste esté
-`autorizado`/`aplicado` antes de mover una sola pieza — dos capas
-independientes, no una.
+`ajuste_id`) por cada línea pendiente, enlaza `movimiento_id` y pasa el
+ajuste a `aplicado`, todo en una **sola transacción**. La propia inserción
+del movimiento vuelve a comprobar `ajuste_autorizado(ajuste_id)` dentro del
+trigger del kardex: aunque esta función tuviera un bug, Postgres exige de
+nuevo que el ajuste esté `autorizado`/`aplicado` antes de mover una sola
+pieza — dos capas independientes, no una.
+
+**Por qué es una función y no una ruta con `service_role` (antes de `027`).**
+La versión anterior hacía un for-loop de llamadas sueltas con el cliente
+admin — un `INSERT` en `inventario_movimientos` por línea, seguido de un
+`UPDATE` que enlazaba `movimiento_id`, sin transacción. Un fallo a medio
+camino (el que corrigió `026`: el trigger de `inventario_ajuste_lineas`
+exigía una columna `updated_by` que la tabla no tiene) dejaba el
+movimiento **ya insertado** —el kardex es append-only,
+`inventario_movimientos_no_update` lo hace irreversible incluso para
+`service_role`— pero sin enlazar; un reintento del usuario volvía a
+procesar la misma línea y duplicaba el movimiento. Encontrado verificando
+el circuito completo del puente (`025`) en la app real con dos usuarios
+distintos — se corrigió antes de que hubiera datos reales en riesgo.
 
 ## Hallazgo — sobrevive al conteo
 

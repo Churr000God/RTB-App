@@ -31,12 +31,15 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       return NextResponse.json({ error: 'Nada que actualizar' }, { status: 400 });
     }
 
+    // B-01 (contexto/QA_INTEGRAL_2026-08-06.md): sin .select(), una
+    // dirección fuera de RLS o de otra entidad devolvía 200 sin editarse.
     const supabase = createSupabaseServerClient();
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('direcciones')
       .update(parsed.data)
       .eq('id', params.did)
-      .eq('entidad_id', params.id);
+      .eq('entidad_id', params.id)
+      .select('id');
 
     if (error) {
       const duplicado = /uq_direccion_principal_entidad_tipo/i.test(error.message);
@@ -44,6 +47,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         { error: duplicado ? 'Ya existe una dirección principal de ese tipo para esta entidad.' : error.message },
         { status: 400 }
       );
+    }
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'No se pudo editar: la dirección no existe o no tienes permiso.' }, { status: 403 });
     }
 
     return NextResponse.json({ success: true });
