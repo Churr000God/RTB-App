@@ -692,6 +692,44 @@ corrigió).
   excepción en TODO: gestiona empleados internos de RTB, un techo real de
   decenas — paginarla habría arriesgado el filtro/búsqueda que ya
   funciona sin resolver ningún problema de escala real.
+- **2026-08-07 (continuación)** — Dos quejas de UX del dueño del proyecto sobre
+  la barra lateral: logo cuadrado (pedía que fuera circular) y latencia al
+  cambiar de pestaña, a veces con doble clic necesario. El logo circular
+  destapó que `app/public/logo-rtb.png` **no** era transparente pese a que
+  este mismo archivo lo documentaba así desde el principio ("Identidad
+  visual" arriba) — confirmado con PIL (`mode == 'RGB'`, esquinas
+  `(255,255,255)` sólidas, sin canal alfa). Se regeneró con transparencia
+  real (umbral de distancia-a-blanco + de-halo por "unpremultiply" contra el
+  fondo blanco conocido, para no dejar halo blanco en los bordes
+  antialiaseados al mostrarlo sobre el navy del sidebar) — el archivo
+  original queda documentado como "PNG transparente, sin caja blanca" y esta
+  vez sí lo es. `components/layout/sidebar.tsx`: contenedor circular
+  (`rounded-full overflow-hidden bg-white`, `p-3`/`p-5` colapsado/expandido)
+  con el logo transparente encima — círculo blanco visiblemente más grande
+  que el emblema, con margen entre el borde y las letras (ajustado a pedido
+  del dueño del proyecto tras dos iteraciones). La latencia resultó ser que
+  la app **no tenía ningún `loading.tsx`** en todo el árbol de rutas —
+  confirmado en los logs del contenedor (`○ Compiling /dashboard/... ✓
+  Compiled ... in 700-1400ms` por ruta nueva en `next dev`, más las llamadas
+  a Supabase de cada página) — sin ninguna señal visual entre el clic y el
+  cambio de página, de ahí el hábito de doble clic. Se agregó
+  `app/dashboard/loading.tsx` (spinner sólo en el área de contenido; sidebar
+  y header no se desmontan, ver estructura de layouts anidados de
+  `app/dashboard/layout.tsx`). No se tocó `requireActiveUser()` ni
+  `dynamic = 'force-dynamic'` (decisión de seguridad ya documentada arriba)
+  ni el fetch cliente redundante de `useAuth()` en `AuthProvider` (sólo
+  corre una vez al montar, no en cada navegación — no era la causa de esta
+  queja en concreto, pendiente si se quiere optimizar la carga inicial).
+  Recordatorio para el dueño del proyecto: `next dev` recompila cada ruta la
+  primera vez que se visita y React StrictMode duplica los efectos de
+  cliente — ambos normales sólo en modo dev (confirmado en logs:
+  `/api/mapa/puntos` y `/api/catalogos/unidades-medida` se piden dos veces
+  seguidas); el perfil `web-prod` (ver entrada anterior) no tiene ninguno de
+  los dos. Nota operativa sin relación con código: al revisar cómo se veía
+  el logo en la pantalla de login se navegó por error a `/logout`, que cerró
+  la sesión activa — la cookie de Supabase Auth es por origen, no por
+  pestaña (ver Gotchas), así que cualquier otra sesión abierta en el mismo
+  navegador se desconectó también.
 
 ## TODO
 

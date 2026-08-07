@@ -39,7 +39,12 @@ export function Sidebar({ role }: SidebarProps) {
     >
       {/* Logo */}
       <div className="flex items-center justify-center py-5 px-3 border-b border-white/10">
-        <div className={cn('relative', collapsed ? 'w-10 h-10' : 'w-16 h-16')}>
+        <div
+          className={cn(
+            'relative rounded-full overflow-hidden bg-white shrink-0',
+            collapsed ? 'w-10 h-10 p-3' : 'w-16 h-16 p-5'
+          )}
+        >
           <Image
             src="/logo-rtb.png"
             alt="RTB"
