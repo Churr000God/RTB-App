@@ -116,11 +116,52 @@ documento porque cada uno tiene su propia máquina de transiciones:
 
 | Documento | Estados | Quién transiciona |
 |---|---|---|
-| `ventas_cotizaciones` | borrador·enviada·aprobada·rechazada·expirada·cancelada | Ventas (enviar/rechazar/cancelar), el sistema (expirar por vigencia), Ventas+evidencia (aprobar) |
+| `ventas_cotizaciones` | borrador·enviada·aprobada·rechazada·expirada·cancelada·en_devolucion (§5b, 2026-08-08) | Ventas (enviar/rechazar/cancelar/eliminar), el sistema (expirar por vigencia), Ventas+evidencia (aprobar) |
 | `ventas_pedidos` | (ver `db/ESQUEMA.md`) | Creado sólo por `ventas_cotizacion_aprobar()`; liberado a Almacén sólo por `ventas_pedido_liberar_almacen()` |
 | `ventas_notas_remision` | 10 estados, incluye `facturada`/`pagada_cerrada` sin escribir todavía | Ventas/Almacén (emitir, despachar), Facturación (módulo futuro) |
 | `ventas_ordenes_compra_cliente` | 8 estados | Ventas (registrar, validar), resultado de `ventas_po_validar()` |
 | `ventas_po_nr_vinculos` | 8 estados | Resultado de `ventas_po_validar()`, nunca escrito a mano |
+
+## 5b. Rechazar, cancelar, eliminar y devoluciones (actualizado 2026-08-08)
+
+Rediseño pedido por el dueño del proyecto tras la primera entrega —
+sustituye por completo la redacción original de `cancelar()` de §5/§9 de
+`sessions/2026-08-07-modulo-ventas.md`. Detalle técnico completo,
+verificación y bugs cerrados en el proceso: `db/procesos/ciclo-de-venta.md`
+§3b y `sessions/2026-08-08-ciclo-cotizacion-devoluciones.md`.
+
+- **`rechazada`** — el cliente dijo que no a una cotización **enviada**.
+  Sin cambio de comportamiento respecto a la primera entrega.
+- **`cancelada`** — el cliente se retractó de una cotización **aprobada**,
+  y sólo si su pedido no muestra ninguna entrega (`ventas_pedidos.estado`
+  distinto de `entregado`/`entregado_parcial`). Cascada completa: libera
+  las reservas de `inventario_apartados`, cancela la NR si existe (aún sin
+  despacho) y marca el pedido `cancelado` — los tres con motivo y autoría
+  obligatorios. Antes de este cambio no existía ninguna vía para deshacer
+  una aprobación; `pedido_estado.'cancelado'` era un valor de enum muerto
+  desde `031`.
+- **`en_devolucion`** — si al intentar cancelar una aprobada el pedido ya
+  tiene entrega (total o parcial), no se cancela nada del pedido/NR/
+  apartados (siguen reflejando lo que de verdad salió) — se abre una fila
+  de seguimiento en `ventas_devoluciones` (folio, motivo, `valor_entregado`
+  informativo, `pendiente`/`resuelta`) y la cotización/pedido pasan a
+  `en_devolucion`. Alcance explícitamente limitado a seguimiento: **sin
+  reembolso ni CFDI real** todavía — eso es RTB-PRO-FAC-01, módulo futuro
+  (ver §10). `super_admin`/`direccion`/`gerente_comercial` la marcan
+  `resuelta` a mano desde `/dashboard/ventas/devoluciones` una vez que el
+  proceso físico/administrativo fuera del sistema termina.
+- **Eliminar una cotización** — sólo en `borrador`, sólo por completo
+  (`ventas_cotizacion_eliminar()` borra sus líneas y la cabecera en una
+  sola transacción; no hay eliminación parcial). Una línea individual
+  también se puede borrar sola mientras la cotización siga en `borrador`
+  (`DELETE` real, no una bandera).
+- **Editar líneas en `enviada`** — antes sólo `borrador` podía editar
+  producto/precio/cantidad/descuento de una línea; ahora `enviada` tiene
+  exactamente el mismo poder (el cliente sigue negociando después del
+  envío). De paso se cerró un hueco real: fuera de `borrador`/`enviada`
+  (es decir, con la cotización ya `aprobada` o posterior) **ningún** campo
+  de línea es editable — antes `cantidad`/`descuento_porcentaje`/`activo`
+  sí lo eran, sin que nada lo impidiera.
 
 ## 6. PO↔NR — tabla de asignación por partida, no relación simple
 
