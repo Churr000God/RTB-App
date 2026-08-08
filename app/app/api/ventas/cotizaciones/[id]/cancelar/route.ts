@@ -5,11 +5,19 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { cotizacionCancelarSchema } from '@/lib/ventas/schemas';
 import { statusPorErrcode } from '@/lib/ventas/errores';
+import { rolesQuePueden } from '@/lib/ventas/permisos';
 
-// POST - cancela una cotización en borrador o enviada (ventas_cotizacion_cancelar, 030).
+// POST - cancela una cotización APROBADA (ventas_cotizacion_cancelar, 040).
+// Ya no acepta borrador/enviada: un borrador se elimina
+// (.../[id]/eliminar), una enviada se rechaza (.../[id]/rechazar). Si el
+// pedido asociado ya muestra alguna entrega (total o parcial), la función
+// NO cancela — abre una devolución y lo indica en `resultado`. El jsonb de
+// la función se esparce directo en la respuesta (no anidado bajo `data`)
+// para que el cliente lea `resultado`/`devolucion_folio`/`valor_entregado`
+// sin un nivel extra.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    const { response } = await requireApiRole(['super_admin', 'direccion', 'ventas']);
+    const { response } = await requireApiRole(rolesQuePueden('cotizaciones', 'update'));
     if (response) return response;
 
     const parsed = cotizacionCancelarSchema.safeParse(await request.json().catch(() => null));
@@ -24,7 +32,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     });
     if (error) return NextResponse.json({ error: error.message }, { status: statusPorErrcode(error.code) });
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ ...data });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

@@ -19,6 +19,11 @@ const nextConfig = {
     // barrel file grande como lucide-react), así que no hay nada que
     // ganar optimizándolos.
     optimizePackageImports: ['lucide-react'],
+    // puppeteer-core (generación de PDF de cotizaciones, sólo server-only)
+    // resuelve su propio binario/módulos en runtime — si webpack lo empaqueta
+    // como cualquier otro import, el standalone build del stage `runner`
+    // puede quedar sin archivos que sí necesita en tiempo de ejecución.
+    serverComponentsExternalPackages: ['puppeteer-core'],
   },
 };
 

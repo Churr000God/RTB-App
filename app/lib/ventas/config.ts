@@ -8,7 +8,10 @@ import {
   type ClienteTipo,
   type ConsultaEstado,
   type ConsultaUrgencia,
+  type CotizacionFechaCampo,
+  type CotizacionOrden,
   type DatoFaltante,
+  type DevolucionEstado,
   type NrEstado,
   type PedidoEstado,
   type PoEstado,
@@ -28,6 +31,7 @@ export const VENTAS_COTIZACION_ESTADO_LABELS: Record<VentasCotizacionEstado, str
   rechazada: 'Rechazada',
   expirada: 'Expirada',
   cancelada: 'Cancelada',
+  en_devolucion: 'En devolución',
 };
 
 export const VENTAS_COTIZACION_ESTADO_TONO: Record<VentasCotizacionEstado, Tono> = {
@@ -37,7 +41,41 @@ export const VENTAS_COTIZACION_ESTADO_TONO: Record<VentasCotizacionEstado, Tono>
   rechazada: 'bloqueado',
   expirada: 'inactivo',
   cancelada: 'inactivo',
+  en_devolucion: 'bloqueado',
 };
+
+export const DEVOLUCION_ESTADO_LABELS: Record<DevolucionEstado, string> = {
+  pendiente: 'Pendiente',
+  resuelta: 'Resuelta',
+};
+
+export const DEVOLUCION_ESTADO_TONO: Record<DevolucionEstado, Tono> = {
+  pendiente: 'bloqueado',
+  resuelta: 'activo',
+};
+
+/** Selector de campo del filtro de rango de fechas del listado de
+ *  cotizaciones. 'resolucion' cubre aprobada/rechazada/cancelada
+ *  (resuelta_at es genérico, 030 — no existe aprobada_at). */
+export const COTIZACION_FECHA_CAMPO_LABELS: Record<CotizacionFechaCampo, string> = {
+  creacion: 'Fecha de creación',
+  envio: 'Fecha de envío',
+  resolucion: 'Aprobación / resolución',
+  vigencia: 'Vigencia hasta',
+};
+
+export const COTIZACION_ORDEN_LABELS: Record<CotizacionOrden, string> = {
+  reciente: 'Más recientes primero',
+  antigua: 'Más antiguas primero',
+  monto_desc: 'Mayor monto primero',
+  monto_asc: 'Menor monto primero',
+  vigencia: 'Vigencia más próxima',
+};
+
+/** Tarjetas por columna del tablero antes de mostrar "+N más — ver en la
+ *  tabla". No es un límite de negocio, es sólo para no renderizar
+ *  columnas interminables. */
+export const COTIZACION_TABLERO_TOPE = 40;
 
 export const PRECIO_ORIGEN_LABELS: Record<PrecioOrigenVenta, string> = {
   refaccion: 'Costo Refacción',
@@ -85,6 +123,7 @@ export const PEDIDO_ESTADO_LABELS: Record<PedidoEstado, string> = {
   entregado: 'Entregado',
   cerrado: 'Cerrado',
   cancelado: 'Cancelado',
+  en_devolucion: 'En devolución',
 };
 
 export const PEDIDO_ESTADO_TONO: Record<PedidoEstado, Tono> = {
@@ -95,6 +134,7 @@ export const PEDIDO_ESTADO_TONO: Record<PedidoEstado, Tono> = {
   entregado: 'activo',
   cerrado: 'inactivo',
   cancelado: 'inactivo',
+  en_devolucion: 'bloqueado',
 };
 
 // "Estado de máxima vigilancia" (RTB-PRO-VEN-01 §III): entregada_sin_po es
@@ -217,6 +257,15 @@ export const EVIDENCIA_VENTAS_BYTES_MAX = 10 * 1024 * 1024;
  *  cotización — el vendedor puede cambiarla; ventas_cotizacion_enviar()
  *  (030) exige que exista, sin importar el valor. */
 export const VIGENCIA_COTIZACION_DIAS_DEFAULT = 15;
+
+/** Tasa de IVA para el documento (PDF/impresión) de una cotización. El
+ *  esquema NO tiene columna de IVA — ventas_cotizacion_lineas.importe es el
+ *  único agregado real (snapshot de precio, sin impuestos). Este valor se
+ *  usa SÓLO al renderizar el documento comercial
+ *  (lib/ventas/documento-cotizacion.ts): es informativo para el cliente,
+ *  no una obligación fiscal registrada — el CFDI real (RTB-PRO-FAC-01) es
+ *  un módulo futuro y calculará impuestos por su cuenta. */
+export const IVA_TASA = 0.16;
 
 // ROLES_AUTORIZAN_VENTAS/ROLES_RESPONDEN_CONSULTA/ROLES_DESPACHAN_NR vivían
 // aquí duplicadas de lib/ventas/permisos.ts (mismos valores, nombres

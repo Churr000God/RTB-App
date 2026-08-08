@@ -984,6 +984,154 @@ acotado por `CHECK` a la lista cerrada (`contacto_no_identificado`,
 `datos_fiscales_pendientes`). Append-only, escrita sólo por
 `ventas_cotizacion_aprobar()`.
 
+#### `ventas_cotizaciones_listado` (`038`) — primera vista del repo
+
+Listado enriquecido para `/dashboard/ventas/cotizaciones` (búsqueda,
+tablero por estado, filtros de fecha). Aplana `entidades` (`entidad_clave`,
+`entidad_siglas`, `entidad_nombre_legal`, `entidad_nombre_comercial` —
+`entidad_id` no tiene FK directa a `clientes`, sólo a `entidades`) y agrega
+`total`/`lineas_count`/`lineas_en_consulta` sumando
+`ventas_cotizacion_lineas` con `activo = true` (no hay columna de total en
+la cabecera, ni debe haberla: el snapshot de precio vive en la línea).
+
+Es `with (security_invoker = true)` — **no** el patrón "función, no vista"
+de `usuarios_directorio()` (002): ese patrón existe para *saltarse* la RLS
+a propósito (lo que el advisor marca `ERROR` en una vista
+`security_invoker = false`). Aquí es lo contrario: la vista hereda la RLS
+de `ventas_cotizaciones`/`entidades`/`ventas_cotizacion_lineas` tal cual, y
+`security_invoker = true` no dispara ese advisor. `GRANT SELECT` explícito
+a `authenticated` (el gotcha de RLS-sin-GRANT aplica igual a una vista).
+
+`LEFT JOIN` a `entidades` (no `INNER`) a propósito: aunque `entidad_id` es
+`NOT NULL` con FK y hoy nunca falta la fila, un `INNER JOIN` haría que la
+completitud del listado dependiera de la RLS de *otra* tabla — si algún
+día `entidades_select` se estrecha por rol, cotizaciones enteras
+desaparecerían del listado en silencio. Con `LEFT JOIN`, en ese escenario
+sólo se pierde el nombre del cliente.
+
+El `LEFT JOIN LATERAL` de líneas se poda por completo del plan cuando
+PostgREST pide sólo `count(*)` (verificado con `EXPLAIN (analyze,
+buffers)`) — el conteo exacto de cada página o columna del tablero no paga
+la agregación sobre `ventas_cotizacion_lineas`.
+
+Índices nuevos sobre `ventas_cotizaciones`: `created_at desc`,
+`resuelta_at desc` (parcial), `enviada_at desc` (parcial),
+`vigencia_hasta` (parcial) — `030` sólo tenía `entidad_id`/`vendedor_id`/
+`estado`.
+
+#### Máquina de estados de cotización/pedido/NR — `rechazar`/`cancelar`/`devolución` (`039`/`040`/`041`)
+
+Vocabulario cerrado con el dueño del proyecto: `rechazada` = el cliente dijo
+que no a una cotización **enviada** (`ventas_cotizacion_rechazar()`, sin
+cambios — ya sólo aceptaba ese origen). `cancelada` = el cliente se retractó
+de una **aprobada**, y sólo si su pedido **no** muestra ninguna entrega
+(`ventas_cotizacion_cancelar()`, reescrita en `040` — antes permitía
+`borrador`/`enviada` y prohibía `aprobada`, exactamente al revés). Un
+`borrador` que ya no sirve se **elimina** (`ventas_cotizacion_eliminar()`,
+DELETE real), nunca se cancela.
+
+`ventas_cotizacion_cancelar()` tiene dos ramas según
+`ventas_pedidos.estado`:
+
+- **Sin entrega** (`aprobado`/`liberado`): cascada completa en la misma
+  transacción — pedido → `cancelado` (valor del enum que ninguna función
+  escribía desde `031`), NR → `cancelada` si ya existía (puede existir en
+  `'abierta'` sin nada despachado: `ventas_nr_emitir()` la crea con el
+  pedido todavía `'aprobado'`, antes de liberar a Almacén), apartados
+  `activo` del pedido → `liberado` (patrón ya existente,
+  `apartados_before_update()` decrementa `cantidad_apartada` solo).
+- **Con entrega** (`entregado`/`entregado_parcial`): **no cancela nada** —
+  abre una fila en `ventas_devoluciones` y pasa cotización y pedido a
+  `'en_devolucion'` (valor nuevo en ambos enums). NR y apartados quedan
+  intactos: documentan una entrega que sí ocurrió.
+
+`ventas_cotizacion_linea_before_write()` (trigger de
+`ventas_cotizacion_lineas`) se simplificó de "protege 5 columnas de precio
+comparando contra el literal `'borrador'`" a un candado total: ningún
+campo (INSERT o UPDATE) se toca fuera de `borrador`/`enviada`. Cierra un
+hueco real encontrado en la verificación — antes se podía cambiar
+`cantidad`/`descuento_porcentaje`/`activo`/`observaciones` de una línea de
+una cotización **ya aprobada**, con pedido y reservas ya creados. De paso,
+`enviada` gana el mismo poder de edición que `borrador` (decisión
+confirmada: el vendedor sigue negociando mientras el cliente no ha
+respondido).
+
+`ventas_cotizacion_eliminar()` borra `ventas_cotizacion_lineas` y luego
+`ventas_cotizaciones` en una sola transacción — nunca dos llamadas sueltas
+desde el cliente (mismo criterio que `027_ajuste_aplicar_atomico.sql`).
+Antes desliga/cancela cualquier `ventas_consultas_compras` ligada:
+`cotizacion_id` ahí es `on delete restrict`, así que un borrador nacido de
+"Consultar a Compras" habría fallado con una violación de llave foránea
+cruda sin este paso (bug encontrado y corregido en `041`, antes de que
+hubiera datos reales en riesgo). Las consultas `abierta`/`en_proceso` se
+cancelan y desligan; las `respondida`/`sin_disponibilidad` sólo se
+desligan — `consulta_respuesta_chk` es una equivalencia y forzarlas a
+`cancelada` violaría el `CHECK` o exigiría borrar la respuesta ya
+capturada.
+
+**`ventas_devoluciones`** (`039`, alcance deliberadamente básico): folio
+`DEV-000000`, `cotizacion_id`/`pedido_id`/`nr_id`/`entidad_id`, `motivo`,
+`valor_entregado` (informativo — `sum(cantidad_entregada * precio_unitario)`
+de las líneas de la NR al momento de abrir la devolución, **no** un monto a
+reembolsar), `estado` (`pendiente`/`resuelta`, sólo dos valores),
+`resuelta_at`/`resuelta_por`/`notas_resolucion`. Sin `GRANT INSERT/UPDATE`
+para `authenticated` — nace únicamente por `ventas_cotizacion_cancelar()`,
+se cierra únicamente por `ventas_devolucion_resolver()` (`super_admin`/
+`direccion`/`gerente_comercial`; NO `ventas` — abrir es consecuencia de
+cancelar, cerrar es un acto gerencial). Índice único parcial
+`uq_ventas_dev_pedido_pendiente` impide dos devoluciones `pendiente`
+simultáneas sobre el mismo pedido. **Sin reembolso, nota de crédito ni
+recepción física al inventario** — Facturación (RTB-PRO-FAC-01) no existe
+todavía; el gancho para cuando exista es el tipo de movimiento de kardex
+`entrada_devolucion_cliente` (`011`), sin ningún escritor hasta hoy.
+
+`ventas_pedidos`/`ventas_notas_remision` ganaron `cancelado_at`/
+`cancelado_por`/`motivo_cancelacion` (`039`), mismo idioma que
+`ventas_po_nr_vinculos` (`036`): equivalencia `estado='cancelado(a)' ⟺` las
+tres columnas no nulas. `ventas_cotizacion_lineas` ganó `GRANT DELETE` +
+política RLS (`estado='borrador'` de la cotización, mismo criterio de
+rol/dueño que insert/update) — primer `DELETE` real de todo el esquema; los
+triggers de auditoría de `ventas_cotizaciones`/`ventas_cotizacion_lineas`
+ganaron `or delete` para no perder el rastro (`audit_row()` ya sabía
+manejarlo, pero ningún trigger lo registraba porque hasta ahora nada se
+borraba de verdad).
+
+#### `ventas_cotizacion_envios` (`042`) — bitácora de envíos por correo
+
+Append-only: cada intento de mandar el PDF de una cotización por correo
+(MailerSend), exitoso **y** fallido — un envío que no llegó debe quedar
+visible en el detalle, no desaparecer. Columnas: `para`/`cc`/`asunto`/
+`mensaje` (lo que el vendedor capturó), `adjunto_nombre`, `resultado`
+(`exitoso`/`fallido`), `mensaje_id` (header `X-Message-Id` de la respuesta
+202 de MailerSend, para rastrear el correo en su panel), `error_detalle`
+(obligatorio por `CHECK` cuando `resultado='fallido'`), `enviado_por`/
+`enviado_at` (default `auth.uid()`/`now()`, fuera del `GRANT INSERT` —
+mismo mecanismo que impide la escalada de privilegios en `profiles`).
+
+**No** es una función `SECURITY DEFINER`, a diferencia de
+enviar/aprobar/rechazar/cancelar: no transiciona ningún estado ni toca
+kardex, es sólo un registro de auditoría — el `INSERT` lo hace el cliente
+del propio usuario con `GRANT` por columna. Política de `insert` espejo
+exacto de `ventas_cotizaciones_update` (`037`): `super_admin`/`direccion`/
+`gerente_comercial` sin restricción, `ventas` sólo sobre sus propias
+cotizaciones — deliberadamente **no** copia la exclusión de
+`gerente_comercial` que tiene `ventas_cotizacion_enviar()` (`030`), porque
+esa exclusión es de la *transición de estado*, no de mandar un correo. Sin
+`GRANT UPDATE`/`DELETE` para `authenticated` bajo ninguna circunstancia.
+`cotizacion_id` es `on delete cascade` (coherente con
+`ventas_cotizacion_eliminar()`, que borra borradores — el rastro sigue en
+`audit_log`, que no cae en cascada).
+
+No hay webhook de MailerSend conectado: `resultado='exitoso'` significa
+que el proveedor **aceptó** el envío (HTTP 202), no que el cliente lo
+recibió — un rebote posterior no se refleja aquí (ver TODO).
+
+La construcción de filtros (búsqueda, rango de fecha por campo elegible,
+canal, vendedor, vigencia, líneas en consulta, orden con desempate por
+`folio`) vive en `app/lib/ventas/listado-cotizaciones.ts` — un solo lugar
+para el modo lista, el modo tablero (una consulta por columna) y la
+primera carga del Server Component, para que nunca diverjan entre sí.
+
 ### `ventas_pedidos` / `ventas_pedido_lineas` + `inventario_apartados` (`031`)
 
 Nace únicamente por `ventas_cotizacion_aprobar()` (**sin** `GRANT INSERT`
@@ -1145,3 +1293,8 @@ URLs, nunca en código `'use client'`.
   `idx_marcas_activo`/`idx_productos_marca` sin uso todavía por la base
   vacía. Verificado tras aplicar la migración: mismos WARN/INFO que sus tres
   tablas hermanas, sin ningún `ERROR` nuevo.
+- `unused_index` sobre los 4 índices de fecha nuevos de `038`
+  (`idx_ventas_cot_created_at`/`enviada_at`/`resuelta_at`/`vigencia`) —
+  esperable con 6 cotizaciones en la base; a ese volumen el planner
+  prefiere `Seq Scan` (verificado con `EXPLAIN`), y es lo correcto. Revisar
+  cuando haya volumen real.

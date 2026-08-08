@@ -42,6 +42,23 @@ export const cotizacionUpdateSchema = z.object({
 export const cotizacionRechazarSchema = z.object({ motivo: motivoSchema });
 export const cotizacionCancelarSchema = z.object({ motivo: motivoSchema });
 
+// Espejo del GRANT INSERT por columna de ventas_cotizacion_envios (042):
+// NO acepta resultado/mensaje_id/error_detalle/proveedor — eso lo decide el
+// servidor según lo que responda MailerSend, nunca el cliente.
+const emailSchema = z.string().trim().toLowerCase().email('El correo no es válido');
+export const cotizacionCorreoSchema = z.object({
+  para: emailSchema,
+  cc: z.array(emailSchema).max(5, 'Máximo 5 correos en copia').optional().default([]),
+  asunto: z.string().trim().min(3, 'El asunto es obligatorio').max(300),
+  mensaje: z.string().trim().max(4000).optional().nullable(),
+});
+
+// ---------- Devoluciones (039/040) ----------
+
+export const devolucionResolverSchema = z.object({
+  notas: z.string().trim().min(3, 'Describe cómo se resolvió la devolución').max(2000),
+});
+
 export const cotizacionAprobarSchema = z.object({
   canal: z.enum(CANAL_ORIGENES, { errorMap: () => ({ message: 'Falta el canal de la evidencia de aprobación' }) }),
   evidencia_path: z.string().trim().max(500).optional().nullable(),

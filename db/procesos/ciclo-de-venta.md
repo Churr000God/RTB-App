@@ -99,6 +99,66 @@ línea** (`inventario_apartados`, `nivel='reserva'`) en unidad base del
 producto. Si cualquier línea tiene una unidad de captura incompatible con
 el producto, la función entera se revierte — cero reservas huérfanas.
 
+## 3a. Documento (PDF) y envío por correo — independiente del flujo de estados
+
+`GET /api/ventas/cotizaciones/[id]/pdf` genera el documento comercial (PDF,
+vía Chromium headless/Puppeteer, `lib/ventas/generar-pdf.ts`) a partir de
+`lib/ventas/documento-cotizacion.ts` (cabecera + entidad + crédito +
+contacto + dirección + líneas activas + fotos de producto, todo inlineado
+como data URI para un render 100% offline) y
+`lib/ventas/plantilla-cotizacion.ts`. Disponible en **cualquier estado**
+(la plantilla dibuja un sello si no es `enviada`/`aprobada`) — es de sólo
+lectura, misma barrera que el resto del módulo
+(`ACCESO_PANTALLA.cotizaciones`). `?html=1` sirve el mismo render como
+HTML puro, útil para depurar sin Chromium de por medio.
+
+`POST /api/ventas/cotizaciones/[id]/correo` es un botón **independiente**
+de "Enviar al cliente" — NO transiciona el estado, sólo manda el PDF
+adjunto por correo vía MailerSend y registra el intento (éxito o fallo) en
+`ventas_cotizacion_envios` (`042`, ver `db/ESQUEMA.md`). Puede repetirse en
+cualquier estado (reenvíos). Roles: los mismos que pueden editar la
+cotización (`rolesQuePueden('cotizaciones','update')`), deliberadamente
+distinto del set más angosto de `/enviar` — la barrera real de fila sigue
+siendo la política RLS de `ventas_cotizacion_envios`, que sí filtra
+`ventas` por `vendedor_id`.
+
+## 3b. Rechazar, cancelar, eliminar — y cuándo se abre una devolución
+
+Vocabulario cerrado con el dueño del proyecto (`039`/`040`/`041`):
+
+- **Rechazar** (`POST .../rechazar`): sólo desde `enviada` — el cliente dijo
+  que no. Motivo obligatorio.
+- **Cancelar** (`POST .../cancelar`): sólo desde `aprobada` — el cliente se
+  retractó **después** de aprobar. Si el pedido asociado no muestra
+  ninguna entrega (`aprobado`/`liberado`), cancela en cascada: pedido →
+  `cancelado`, NR → `cancelada` si ya existía (puede haberse emitido antes
+  de liberar a Almacén, con el pedido todavía `aprobado`), reservas
+  activas → liberadas. Si el pedido ya muestra `entregado_parcial` o
+  `entregado`, **no cancela nada** — abre una devolución (ver abajo) y lo
+  informa en la respuesta (`resultado: 'en_devolucion'`).
+- **Eliminar** (`POST .../eliminar`): sólo desde `borrador` — DELETE real,
+  no un cambio de estado. Borra las líneas y luego la cabecera en una sola
+  transacción; si hay una consulta a Compras ligada, la cancela (si seguía
+  `abierta`/`en_proceso`) o la desliga (si ya estaba `respondida` —
+  forzarla a `cancelada` violaría `consulta_respuesta_chk`, una
+  equivalencia).
+- Mientras la cotización está en `borrador` **o** `enviada`, sus líneas se
+  editan igual (agregar, cambiar producto/precio, cantidad, descuento,
+  quitar). Fuera de esos dos estados, ningún campo de ninguna línea se
+  toca — ni para `aprobada`, ni para las que ya cerraron el ciclo.
+  "Quitar línea" es `activo:false` en `enviada`; en `borrador` es DELETE
+  real (nunca se mostró al cliente, no hace falta dejar rastro de fila).
+
+**Devoluciones** (`ventas_devoluciones`, seguimiento básico, sin reembolso
+real): se abre automáticamente al intentar cancelar una `aprobada` con
+entrega. Registra folio, motivo, `valor_entregado` (informativo) y queda
+`pendiente` hasta que `super_admin`/`direccion`/`gerente_comercial` la
+resuelve (`POST /api/ventas/devoluciones/[id]/resolver`, con notas
+obligatorias) — resolver **no** regresa la cotización/pedido a
+`cancelada`/`cancelado`: `en_devolucion` es su estado final mientras no
+exista Facturación (RTB-PRO-FAC-01). La NR y las reservas consumidas no se
+tocan: siguen documentando lo que de verdad se entregó.
+
 ## 4. NR (Vía A) y liberación a Almacén
 
 Antes de liberar el pedido, `POST /api/ventas/pedidos/[id]/nota-remision`
@@ -199,6 +259,11 @@ chocar.
 | "No puedes resolver tu propia solicitud" | Anti-autoaprobación (`ventas_autorizaciones`/`cliente_excepciones`) |
 | "Este vínculo ya tiene consecuencias de facturación... no se puede cancelar aquí" | El vínculo está `aprobado_para_facturacion`/`facturado` — `ventas_vinculo_cancelar()` lo bloquea |
 | "Este vínculo ya está cancelado" | Doble cancelación — idempotencia de `ventas_vinculo_cancelar()` |
+| "Sólo se cancela una cotización aprobada" | Se intentó cancelar un `borrador` (elimínalo) o una `enviada` (recházala) |
+| "Sólo se elimina una cotización en borrador" | `ventas_cotizacion_eliminar()` — la cotización ya no está en `borrador` |
+| "Esta cotización ya no admite editar sus líneas (estado %)" | El candado total de `ventas_cotizacion_linea_before_write()` — fuera de `borrador`/`enviada` |
+| "Sólo se borran líneas mientras la cotización está en borrador" | DELETE de línea denegado por RLS (0 filas, sin excepción) — la cotización ya no es `borrador` |
+| "Esta devolución ya está resuelta" | Doble resolución — idempotencia de `ventas_devolucion_resolver()` |
 
 ## Pendiente (fuera de esta entrega)
 

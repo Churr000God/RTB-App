@@ -14,9 +14,10 @@ export type RecursoVentas =
   | 'cliente_excepciones'
   | 'ventas_autorizaciones'
   | 'margenes'
-  | 'precio_venta';
+  | 'precio_venta'
+  | 'devoluciones';
 
-type Accion = 'select' | 'insert' | 'update';
+type Accion = 'select' | 'insert' | 'update' | 'delete';
 
 /**
  * Espejo EXACTO de las políticas RLS de db/migrations/028…034 — sirve sólo
@@ -38,17 +39,28 @@ type Accion = 'select' | 'insert' | 'update';
  *  - 'cliente_excepciones': update real es sólo por
  *    requireApiRole(['super_admin','direccion']) con service_role +
  *    comprobación de que el aprobador no sea el solicitante.
+ *  - 'cotizaciones'.delete: sólo invoca ventas_cotizacion_eliminar() (040) —
+ *    la cabecera no tiene GRANT DELETE de tabla, valida estado='borrador'
+ *    dentro de la función. 'cotizacion_lineas'.delete SÍ es un GRANT DELETE
+ *    real (039) con política RLS `estado='borrador'` — aquí la fila importa.
+ *  - 'devoluciones': nace únicamente por ventas_cotizacion_cancelar() (sin
+ *    insert por GRANT); 'update' describe quién invoca
+ *    ventas_devolucion_resolver() (mismos roles que ROLES_AUTORIZAN, no
+ *    'ventas' — abrirla es consecuencia de cancelar, cerrarla es un acto
+ *    gerencial).
  */
 const MATRIZ: Record<RecursoVentas, Partial<Record<Accion, UserRole[]>>> = {
   cotizaciones: {
     select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
     update: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+    delete: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   cotizacion_lineas: {
     select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
     update: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+    delete: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   consultas_compras: {
     select: TODOS_LOS_ROLES,
@@ -105,6 +117,13 @@ const MATRIZ: Record<RecursoVentas, Partial<Record<Accion, UserRole[]>>> = {
     select: TODOS_LOS_ROLES,
     update: ['super_admin', 'direccion'],
   },
+  devoluciones: {
+    select: TODOS_LOS_ROLES,
+    // Mismos roles que ROLES_AUTORIZAN (declarado más abajo en este mismo
+    // archivo) — no se referencia directamente para no depender del orden
+    // de inicialización de los `const` del módulo.
+    update: ['super_admin', 'direccion', 'gerente_comercial'],
+  },
 };
 
 /** Qué roles pueden ENTRAR a cada pantalla del módulo de Ventas — fuente
@@ -125,7 +144,8 @@ export type PantallaVentas =
   | 'autorizaciones'
   | 'congelamientos'
   | 'excepciones'
-  | 'consultas';
+  | 'consultas'
+  | 'devoluciones';
 
 // Record<PantallaVentas, UserRole[]> a propósito, sin `as const`: NavItem.roles
 // (types/navigation.ts) exige un arreglo MUTABLE, y `as const` produciría
@@ -140,6 +160,9 @@ export const ACCESO_PANTALLA: Record<PantallaVentas, UserRole[]> = {
   congelamientos: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   excepciones: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   consultas: ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'compras'],
+  // 'almacen' queda fuera a propósito: la recepción física de la
+  // devolución (aún sin construir) es donde entraría, no el seguimiento.
+  devoluciones: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
 };
 
 export function puede(rol: UserRole | null | undefined, recurso: RecursoVentas, accion: Accion): boolean {

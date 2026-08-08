@@ -1138,8 +1138,257 @@ contra Supabase — ver TODO.
   Detalle completo, incluida la matriz pantalla×rol y las observaciones
   sin corregir, en `sessions/2026-08-07-agente-d-qa-navegacion-ventas.md`.
 
+- **2026-08-08** — Rehecho el listado de `/dashboard/ventas/cotizaciones`
+  a pedido del dueño del proyecto: era la única pantalla de Ventas que
+  había quedado fuera de la migración a "explorer" de la sesión de
+  optimizaciones (`.limit(50)` fijo, sin `count`, sin paginación, sin
+  búsqueda, un único filtro `?estado=`). Ahora tiene dos vistas
+  intercambiables — **tablero de tarjetas por estado** (por defecto,
+  recordada en `localStorage`) y **tabla** —, búsqueda por
+  folio/siglas/razón social/nombre comercial/clave del cliente, filtro de
+  rango de fechas por campo elegible (creación/envío/aprobación-resolución
+  /vigencia), y filtros de canal, vendedor ("sólo mías"), vigencia
+  (vigente/vencida) y líneas en consulta. Migración
+  `038_ventas_cotizaciones_listado.sql`: vista **`ventas_cotizaciones_listado`**
+  (`security_invoker = true` — primera vista del repo; no es el patrón
+  "función, no vista" de `usuarios_directorio()`, ese existe para saltarse
+  la RLS, aquí es lo contrario) que aplana `entidades` (`entidad_id` no
+  tiene FK a `clientes`) y agrega `total`/`lineas_count`/
+  `lineas_en_consulta` sumando líneas activas — la cabecera nunca tuvo
+  columna de total, el snapshot de precio vive en la línea (030). `LEFT
+  JOIN` a `entidades` a propósito (defensivo: si su RLS se estrechara algún
+  día, se pierde el nombre del cliente, nunca la cotización de la lista) y
+  4 índices nuevos sobre fecha. Capa compartida
+  `app/lib/ventas/listado-cotizaciones.ts` (parseo/validación de filtros
+  contra sus tuplas `as const`, construcción de `.or()`/`.in()`/rango de
+  fechas, orden con desempate por `folio`, construcción de las columnas del
+  tablero) — un solo lugar para el GET (modo lista y modo tablero, una
+  consulta por columna con su `count` real) y el Server Component, para que
+  nunca diverjan (el defecto que ya tenía esta ruta: el `page.tsx` viejo
+  traía el embed de `entidades` y el GET no). Primer consumidor de
+  `components/ui/calendar.tsx` (huérfano desde la purga de componentes) vía
+  el componente nuevo `components/ui/rango-fechas.tsx`. Verificado con SQL
+  simulando rol real (conteo de la vista = conteo de la tabla base para
+  varios roles, `42501` al revocar el `GRANT` de la vista y ruta normal al
+  restaurarlo, total de la vista contra `sum(importe)` calculado aparte,
+  `EXPLAIN` confirmando que el `LEFT JOIN LATERAL` de líneas se poda del
+  plan en un `count(*)`), `get_advisors` sin `ERROR` nuevo, `npx tsc
+  --noEmit` y `docker build --target builder` limpios, y clic a clic real
+  con `qa.ventas` (búsqueda por folio/siglas/razón social **con coma** —
+  caso real, "QA Cliente Uno, S.A. de C.V." — sin romper el `.or()` de
+  PostgREST; filtro de fecha de creación acotado a un solo día confirmando
+  que el último día del rango sí aparece; filtro de fecha de envío
+  excluyendo correctamente los borradores sin `enviada_at`; "sólo mías";
+  deep-link `?estado=` desde el tablero de Ventas con su enlace "ver
+  todas"; persistencia de la vista tablero/tabla en `localStorage` tras
+  F5) y `qa.almacen` confirmando `403`/redirect por no tener acceso a la
+  pantalla. Sin cambios de RLS ni de autorización.
+
+- **2026-08-08 (sesión aparte, misma jornada)** — Rediseño del ciclo de vida
+  de `ventas_cotizaciones` a pedido del dueño del proyecto: hasta ahora
+  "cancelar" cubría dos casos sin distinguirlos (arrepentirse antes de
+  enviar / el cliente se retracta después de aprobar). Vocabulario nuevo:
+  `rechazada` = el cliente dijo que no a una **enviada** (sin cambios, ya
+  era así); `cancelada` = el cliente se retractó de una **aprobada** — y
+  sólo si nada se ha entregado todavía (antes era al revés:
+  `ventas_cotizacion_cancelar()` permitía borrador/enviada y prohibía
+  aprobada). Si el pedido asociado ya muestra `entregado_parcial` **o**
+  `entregado`, cancelar no procede: se abre una **devolución** en su
+  lugar — nueva tabla `ventas_devoluciones` (seguimiento básico: folio,
+  motivo, `valor_entregado` informativo, `pendiente`/`resuelta`; **sin**
+  reembolso ni nota de crédito real, Facturación/RTB-PRO-FAC-01 no existe
+  todavía — TODO explícito, con el gancho ya documentado hacia
+  `entrada_devolucion_cliente` del kardex, `011`, sin ningún escritor
+  todavía). Dos migraciones nuevas por el límite de Postgres de no poder
+  referenciar en la misma transacción un valor que `ALTER TYPE ... ADD
+  VALUE` acaba de agregar: `039_ventas_devoluciones_schema.sql` (enums
+  `'en_devolucion'` en `ventas_cotizacion_estado`/`pedido_estado`, tabla
+  `ventas_devoluciones`, columnas `cancelado_at`/`cancelado_por`/
+  `motivo_cancelacion` en `ventas_pedidos`/`ventas_notas_remision` —
+  ninguna función las escribía jamás, eran valores muertos del enum desde
+  031/032 —, `GRANT DELETE`+RLS de `ventas_cotizacion_lineas` borrador-only,
+  `or delete` agregado a los triggers de auditoría de cotización/líneas,
+  primer `DELETE` real de todo el esquema) y
+  `040_ventas_cotizacion_transiciones.sql` (después de que 039 hiciera
+  commit: `ventas_cotizacion_cancelar()` reescrita con las dos ramas,
+  `ventas_cotizacion_linea_before_write()` con candado total —ni INSERT ni
+  UPDATE— fuera de `borrador`/`enviada` en vez de proteger sólo 5 columnas
+  de precio comparando contra el literal `'borrador'` (cierra un hueco
+  real: antes se podía cambiar cantidad/descuento/activo de una línea de
+  una cotización **ya aprobada**), `ventas_cotizacion_eliminar()` nueva
+  (borra líneas + cabecera de un borrador en una transacción),
+  `ventas_devolucion_resolver()` nueva, `ventas_kpis()` +
+  `devoluciones_pendientes`). Corrección `041_ventas_cotizacion_eliminar_fix.sql`
+  el mismo día: `ventas_consultas_compras.cotizacion_id` es
+  `on delete restrict` — un borrador creado con "Consultar a Compras"
+  fallaba al eliminarse con una violación de llave foránea cruda; ahora las
+  consultas `abierta`/`en_proceso` ligadas se cancelan y desligan, las
+  `respondida`/`sin_disponibilidad` sólo se desligan
+  (`consulta_respuesta_chk` es una equivalencia, forzarlas a `cancelada`
+  habría violado el `CHECK` o exigido borrar la respuesta ya capturada) —
+  y de paso `valor_entregado` a `ventas_devoluciones` + índice único
+  parcial que impide dos devoluciones `pendiente` sobre el mismo pedido.
+  Toda migración partió del cuerpo **vivo** de las funciones (verificado
+  con `pg_get_functiondef()` contra Supabase real, no de `030`/`031`, que
+  `037_roles_comerciales.sql` ya había reemplazado). Capa de aplicación:
+  `puedeAdministrar` en `cotizacion-detalle.tsx` ganó `gerente_comercial`
+  (bug preexistente, la RLS ya lo autorizaba desde `037` pero la UI le
+  ocultaba los botones); botón "Cancelar" ahora sólo en `aprobada`, con
+  aviso distinto (`toast`) según la función devuelva `cancelada` o
+  `en_devolucion` con el folio; botón nuevo "Eliminar cotización"
+  (`AlertDialog`) sólo en `borrador`; "Quitar línea" pasa a `DELETE` real
+  en `borrador` y sigue siendo `activo:false` en `enviada`; pantalla nueva
+  `/dashboard/ventas/devoluciones` (bandeja + "Resolver", roles
+  `super_admin`/`direccion`/`gerente_comercial`, `ventas` sólo lectura) y
+  tarjeta KPI "Devoluciones pendientes" en `/dashboard/ventas`. El tablero
+  de cotizaciones (`038`, sesión anterior) ganó la columna "En devolución"
+  automáticamente, sin tocar ni un archivo suyo — generaba una columna por
+  cada valor de `VENTAS_COTIZACION_ESTADOS`. Verificado con SQL simulando
+  rol real sobre los 3 escenarios reales de QA existentes (`PED-000041`
+  `liberado` → cancelación en cascada con apartado liberado y
+  `cantidad_apartada` decrementada; `PED-000040` `entregado` y
+  `PED-000019` `entregado_parcial` → ambos abrieron devolución sin tocar
+  NR/apartados), `get_advisors` sin `ERROR` nuevo, `npx tsc --noEmit` y
+  `docker build --target builder` limpios, y clic a clic real con
+  `qa.ventas` (crear borrador, agregar línea, borrarla de verdad, eliminar
+  la cotización completa, editar producto/precio de una línea `enviada`
+  —antes bloqueado—, cancelar `COT-000061` sin entrega, cancelar
+  `COT-000039` con entrega parcial → `DEV-000006`), `qa.direccion`
+  (resolver `DEV-000006` con notas) y `qa.almacen` confirmando redirect de
+  servidor fuera de `/dashboard/ventas/devoluciones`. Los folios/datos QA
+  generados (incluida la cancelación real de `COT-000061` y la devolución
+  `DEV-000006`, resuelta) quedaron persistidos como evidencia, mismo
+  criterio que otras campañas de este repo. Detalle completo en
+  `sessions/2026-08-08-ciclo-cotizacion-devoluciones.md`. Sesión concurrente
+  en el mismo repositorio (`documento-cotizacion.ts`,
+  `042_ventas_cotizacion_envios.sql`, envío de cotizaciones por correo) —
+  se verificó que ningún archivo tocado por ambas perdiera cambios de la
+  otra.
+
+- **2026-08-08 (sesión aparte, concurrente con la anterior)** — Documento
+  PDF de cotización + envío por correo (MailerSend), pedido explícito del
+  dueño del proyecto con una plantilla HTML de ejemplo (de otro sistema,
+  campos tipo Notion — `nombre_de_cotizacion`, `po`, `pr`, interés, envío —
+  sin equivalente en este esquema). Se adaptó, no se copió literal:
+  PO/PR/interés/envío se eliminaron (no existen en `ventas_cotizaciones`);
+  la rejilla de referencias pasó a Vendedor/Canal/Vigencia real (sin el
+  cálculo "+15 días" que traía el ejemplo — usa `vigencia_hasta` tal cual,
+  o "Sujeta a confirmación")/Crédito; IVA 16% sí se conservó, calculado en
+  el render (`IVA_TASA`, nueva constante en `lib/ventas/config.ts` — el
+  esquema no tiene columna de impuesto, el CFDI real es RTB-PRO-FAC-01,
+  módulo futuro). Decisiones cerradas con el dueño del proyecto antes de
+  implementar (`AskUserQuestion`): motor de PDF = Chromium headless vía
+  Puppeteer dentro de Docker (fidelidad total al HTML/CSS dado, sobre
+  @react-pdf/renderer o una API externa de pago); el envío de correo es un
+  botón **independiente** "Enviar por correo" (no toca
+  `ventas_cotizacion_enviar()`, que sigue sin mandar nada real); MailerSend
+  ya tenía cuenta/dominio verificado, sólo hacía falta dejar la integración
+  lista; destinatario prellenado con el contacto principal o
+  `entidades.correo_principal`, editable.
+
+  Infra: `chromium` + fuentes vía `apk add` en los stages `dev`/`runner`
+  del `Dockerfile` (nunca en `builder`), `puppeteer-core` (nunca
+  `puppeteer` completo — jamás debe intentar descargar su propio
+  Chromium), `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser`,
+  `experimental.serverComponentsExternalPackages` en `next.config.js` para
+  que el output tracing del standalone lo incluya. Verificado que el
+  binario real es `/usr/bin/chromium-browser` (no asumido) y que
+  `puppeteer-core` aparece solo en `.next/standalone/node_modules` sin
+  ningún `COPY` manual adicional. Tipografías Inter + Playfair Display
+  auto-hospedadas (`.woff2` variables descargados de Google Fonts e
+  inlineados en base64 desde `app/public/fonts/`, no cargadas en runtime)
+  para que el render sea 100% offline y determinista — igual que el logo
+  (`app/public/logo-rtb.png` leído del disco y codificado al vuelo, nunca
+  hardcodeado: el base64 que pegó el dueño del proyecto en su ejemplo
+  podía estar desactualizado tras la regeneración con transparencia real
+  del 2026-08-07).
+
+  Migración `042_ventas_cotizacion_envios.sql`: bitácora append-only de
+  cada intento de envío (éxito y fallo — un fallo debe quedar visible, no
+  desaparecer), **sin** función `SECURITY DEFINER` a propósito (no es una
+  transición de estado, es sólo auditoría) — `GRANT INSERT` por columna
+  (excluye `id`/`enviado_por`/`enviado_at`, con default) + política RLS
+  espejo de `ventas_cotizaciones_update` (`037`). Verificado con 8
+  escenarios de SQL con rol real: `ventas` dueño inserta, `ventas` no
+  dueño → `42501`, `gerente_comercial` sobre cualquier cotización → pasa,
+  roles fuera de la matriz ven pero no insertan, falsear `enviado_por` →
+  bloqueado por privilegio de columna (no por RLS), `update`/`delete` →
+  siempre `42501`, `resultado='fallido'` sin `error_detalle` → viola el
+  `CHECK`, y borrar un borrador con envíos ya registrados
+  (`ventas_cotizacion_eliminar()`) → cascada limpia con el rastro
+  conservado en `audit_log`.
+
+  Capa nueva `lib/ventas/{documento-cotizacion,plantilla-cotizacion,
+  generar-pdf,mailersend}.ts` — un solo render reutilizado por "ver/
+  imprimir" (`GET .../pdf`, con `?html=1` para depurar sin Chromium de por
+  medio) y por el adjunto de correo (`POST .../correo`, que registra
+  siempre en la bitácora, éxito y fallo, con el cliente del propio
+  usuario). Bug real encontrado y corregido en la propia verificación
+  visual (no en el código a simple vista): `productos.marca` ya no existe
+  desde `015` (reemplazada por `marca_id` → `producto_marcas`) —
+  `documento-cotizacion.ts` seguía pidiéndola, así que toda cotización con
+  líneas devolvía **cero líneas** en silencio (el `error` de PostgREST no
+  se estaba revisando — mismo patrón del gotcha ya documentado de
+  `.update()`/`.select()` sin mirar `error`). Segundo hallazgo de la
+  verificación visual: el documento de una sola página se desbordaba a una
+  segunda hoja casi en blanco por una línea de marca al pie duplicada con
+  el footer real de Puppeteer — se quitó, dejando sólo el remate
+  ornamental. Tercero: una línea `en_consulta` (sin precio todavía)
+  mostraba `$0.00` en la tabla — cambiado a `—`, porque no es gratis, es
+  desconocido. Verificado con Puppeteer real dentro del contenedor:
+  documento de 1 línea, de 2 líneas (una con foto real de
+  `producto_imagenes`, descuento, y una línea `en_consulta`), y de **45
+  líneas** para confirmar paginación real (4 páginas, cabecera de tabla
+  repetida en cada una, 45/45 SKU presentes, totales exactos, ninguna
+  cortada). Prueba de escape con `<script>alert(1)</script><img src=x
+  onerror=alert(1)>` en `observaciones` de una cotización real → se
+  renderiza como texto plano, sin diálogo de alerta (Chromium corre con
+  `--no-sandbox`, así que el escape no es cosmético).
+
+  Verificado además: `docker build --target builder` (TypeScript real) y
+  el perfil `web-prod` completo (`docker compose --profile prod up
+  --build`) — `puppeteer-core` sí quedó trazado en
+  `.next/standalone/node_modules` sin `COPY` manual, y Chromium lanza
+  correctamente bajo el usuario no-root `nextjs` del stage `runner`. Clic
+  a clic real con `qa.ventas` (vía *magic link* de
+  `admin.generateLink()`, sin tocar contraseñas): botón "Ver / Imprimir
+  PDF" abre el documento real en el visor del navegador; diálogo "Enviar
+  por correo" prellena destinatario/asunto; sin `MAILERSEND_API_KEY`
+  configurada (pendiente de que el dueño del proyecto la proporcione) el
+  envío falla con el mensaje esperado en español y queda registrado como
+  `fallido` en la bitácora, visible en la sección "Envíos por correo" del
+  detalle tras recargar. Nota de la sesión: el navegador compartido con la
+  sesión concurrente (`sesiones concurrentes`, gotcha ya documentado)
+  mezcló identidades a media prueba — un envío quedó registrado con
+  `enviado_por` de la cuenta real de `super_admin` en vez de `qa.ventas`;
+  no es un defecto del código (la política RLS igual lo habría bloqueado
+  de no ser un rol autorizado, como ya confirmaron los 8 escenarios de
+  SQL), es la misma mezcla de cookies por origen ya conocida.
+
+  **Cierre same-day**: el dueño del proyecto proporcionó la
+  `MAILERSEND_API_KEY` real más tarde en la misma sesión. Antes de fijar
+  el remitente se consultó la propia API de MailerSend (`GET
+  /v1/domains`, `GET /v1/identities`) en vez de asumir: `refacrtb.com.mx`
+  ya estaba verificado (DKIM/SPF) y con historial real de envíos (14,345
+  totales — no era una cuenta nueva limitada a enviar sólo al dueño de la
+  cuenta, el riesgo que se había anotado). Remitente elegido por el dueño
+  del proyecto vía `AskUserQuestion`: `tbadillob@refacrtb.com.mx` (no el
+  `cotizaciones@...` recomendado). `app/.env` actualizado y contenedor
+  recreado (`--force-recreate`, `env_file` no se relee en caliente).
+  **Envío real confirmado de punta a punta** desde la interfaz
+  (`COT-000068` al correo personal del dueño del proyecto como receptor
+  de prueba): MailerSend respondió `202`, `mensaje_id` real capturado,
+  bitácora `exitoso`, visible en el detalle. Detalle completo de la
+  sesión (incluido el cierre) en
+  `sessions/2026-08-08-pdf-cotizacion-correo-mailersend.md`.
+
 ## TODO
 
+- **MailerSend sin webhook.** `ventas_cotizacion_envios.resultado='exitoso'`
+  significa que el proveedor ACEPTÓ el envío (HTTP 202), no que el cliente
+  lo recibió — un rebote posterior no queda reflejado. Si eso llega a
+  importar, es una entrega aparte (endpoint de webhook + columna de estado
+  de entrega).
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
   del módulo de auth.
 - **RTB-INV-01 — carga de los 1,388 SKU reales de Notion.** El esquema está

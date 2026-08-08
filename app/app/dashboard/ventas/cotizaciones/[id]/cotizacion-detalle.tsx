@@ -2,11 +2,26 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { ProductoCombobox } from '@/components/inventario/producto-combobox';
 import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
 import { CotizacionEstadoBadge } from '@/components/ventas/estado-badge';
@@ -18,14 +33,40 @@ import { DATOS_FALTANTES_LABELS, PRECIO_ORIGEN_LABELS } from '@/lib/ventas/confi
 import { formatearMoneda, formatearPorcentaje } from '@/lib/ventas/validaciones';
 import { CANAL_ORIGENES } from '@/types/entidades';
 import { CANAL_ORIGEN_LABELS } from '@/lib/entidades/config';
-import { DATOS_FALTANTES, type CotizacionLineaRow, type PrecioOrigenVenta } from '@/types/ventas';
-import { AlertCircle, ArrowLeft, HelpCircle, Loader2, Plus, Trash2 } from 'lucide-react';
+import {
+  DATOS_FALTANTES,
+  type CotizacionEnvioRow,
+  type CotizacionLineaRow,
+  type DevolucionRow,
+  type PrecioOrigenVenta,
+} from '@/types/ventas';
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  HelpCircle,
+  Loader2,
+  Mail,
+  Plus,
+  Printer,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 
 interface Props {
   cotizacion: any;
   lineasIniciales: CotizacionLineaRow[];
   rol: string;
   userId: string;
+  devolucion?: DevolucionRow | null;
+  /** Contacto principal de la entidad, o entidades.correo_principal de
+   *  respaldo — para prellenar el diálogo "Enviar por correo". */
+  correoSugerido?: string | null;
+  contactoNombre?: string | null;
+  envios?: CotizacionEnvioRow[];
+  /** id → full_name, resuelto por usuarios_directorio() en el servidor
+   *  (profiles_select no deja ver la fila de otro usuario por embed). */
+  nombresUsuarios?: Record<string, string>;
 }
 
 // El servidor manda: cotizacion/lineas llegan como props del Server
@@ -33,12 +74,34 @@ interface Props {
 // exitosa pasa por useAccionServidor(), que hace router.refresh() y deja
 // que Next vuelva a pedir esas props. Ver contexto/AUDITORIA_RTB-VEN-01.md
 // §7.3 (causa raíz: un useState(prop) sólo lee su valor inicial).
-export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, userId }: Props) {
+export function CotizacionDetalle({
+  cotizacion,
+  lineasIniciales: lineas,
+  rol,
+  userId,
+  devolucion,
+  correoSugerido,
+  contactoNombre,
+  envios = [],
+  nombresUsuarios = {},
+}: Props) {
+  const router = useRouter();
   const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
 
   const esBorrador = cotizacion.estado === 'borrador';
-  const puedeAdministrar = rol === 'super_admin' || rol === 'direccion' || (rol === 'ventas' && cotizacion.vendedor_id === userId);
-  const puedeEditar = esBorrador && puedeAdministrar && puede(rol, 'cotizaciones', 'update');
+  const esEnviada = cotizacion.estado === 'enviada';
+  // gerente_comercial faltaba aquí (bug preexistente): la RLS y las
+  // funciones SQL ya lo autorizan desde 037, pero la UI le ocultaba todos
+  // los botones de administración.
+  const puedeAdministrar =
+    rol === 'super_admin' ||
+    rol === 'direccion' ||
+    rol === 'gerente_comercial' ||
+    (rol === 'ventas' && cotizacion.vendedor_id === userId);
+  // 'enviada' edita igual que 'borrador' (decisión confirmada) —
+  // ventas_cotizacion_linea_before_write() (040) ya lo permite en SQL.
+  const puedeEditar = (esBorrador || esEnviada) && puedeAdministrar && puede(rol, 'cotizacion_lineas', 'update');
+  const puedeEliminar = esBorrador && puedeAdministrar && puede(rol, 'cotizaciones', 'delete');
   const lineasActivas = lineas.filter((l) => l.activo);
   const hayPendientes = lineasActivas.some((l) => l.en_consulta);
 
@@ -49,6 +112,32 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
       body: body ? JSON.stringify(body) : undefined,
     });
     return res.ok;
+  };
+
+  // Cancelar no siempre cancela: si el pedido ya mostró entrega,
+  // ventas_cotizacion_cancelar() (040) abre una devolución en su lugar y lo
+  // dice en `resultado` — el aviso tiene que ser distinto en cada caso, así
+  // que aquí se lee la respuesta completa en vez del booleano de accion().
+  const cancelarCotizacion = async (motivo: string) => {
+    const res = await ejecutar(`/api/ventas/cotizaciones/${cotizacion.id}/cancelar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo }),
+    });
+    if (!res.ok) return false;
+    if (res.data?.resultado === 'en_devolucion') {
+      toast.warning(`Ya había material entregado — se abrió la devolución ${res.data.devolucion_folio}.`);
+    } else {
+      toast.success('Cotización cancelada.');
+    }
+    return true;
+  };
+
+  const eliminarCotizacion = async () => {
+    const res = await ejecutar(`/api/ventas/cotizaciones/${cotizacion.id}/eliminar`, { method: 'POST' });
+    if (!res.ok) return;
+    toast.success(`Cotización ${res.data?.folio ?? cotizacion.folio} eliminada.`);
+    router.push('/dashboard/ventas/cotizaciones');
   };
 
   return (
@@ -71,6 +160,29 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
           </p>
         </div>
         <div className="flex gap-2">
+          {/* Disponible en CUALQUIER estado — la plantilla dibuja un sello
+              (BORRADOR/CANCELADA/…) cuando aplica. Ancla real, no fetch+blob:
+              así el propio visor de PDF del navegador da "imprimir" y
+              "descargar" gratis. */}
+          {lineasActivas.length > 0 ? (
+            <Button variant="outline" asChild>
+              <a href={`/api/ventas/cotizaciones/${cotizacion.id}/pdf`} target="_blank" rel="noopener noreferrer">
+                <Printer className="w-4 h-4 mr-1" /> Ver / Imprimir PDF
+              </a>
+            </Button>
+          ) : (
+            <Button variant="outline" disabled title="Agrega al menos una línea">
+              <Printer className="w-4 h-4 mr-1" /> Ver / Imprimir PDF
+            </Button>
+          )}
+          {puedeAdministrar && (
+            <EnviarCorreoDialog
+              cotizacionId={cotizacion.id}
+              folio={cotizacion.folio}
+              correoSugerido={correoSugerido ?? null}
+              deshabilitado={lineasActivas.length === 0}
+            />
+          )}
           {esBorrador && puedeAdministrar && (
             <Button
               onClick={() => accion(`/api/ventas/cotizaciones/${cotizacion.id}/enviar`)}
@@ -97,7 +209,10 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
               onConfirm={(motivo) => accion(`/api/ventas/cotizaciones/${cotizacion.id}/rechazar`, { motivo })}
             />
           )}
-          {(esBorrador || cotizacion.estado === 'enviada') && puedeAdministrar && (
+          {/* Sólo desde 'aprobada' (antes borrador/enviada) — un borrador
+              se elimina, una enviada se rechaza. Si el pedido ya tiene
+              entrega, la función abre una devolución en vez de cancelar. */}
+          {cotizacion.estado === 'aprobada' && puedeAdministrar && (
             <MotivoDialog
               trigger={
                 <Button variant="outline" className="text-destructive" disabled={ocupado}>
@@ -105,10 +220,35 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
                 </Button>
               }
               titulo="Cancelar cotización"
+              descripcion="Se cancelará el pedido, la nota de remisión (si existe) y se liberarán las reservas de inventario. Si el pedido ya registró alguna entrega, no se cancelará: se abrirá una devolución."
               confirmLabel="Cancelar cotización"
               destructivo
-              onConfirm={(motivo) => accion(`/api/ventas/cotizaciones/${cotizacion.id}/cancelar`, { motivo })}
+              onConfirm={cancelarCotizacion}
             />
+          )}
+          {puedeEliminar && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" className="text-destructive" disabled={ocupado}>
+                  Eliminar cotización
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>¿Eliminar {cotizacion.folio}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Se eliminarán también sus {lineasActivas.length} línea{lineasActivas.length === 1 ? '' : 's'} y se
+                    cancelará cualquier consulta a Compras abierta ligada a ella. Esta acción no se puede deshacer.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction onClick={eliminarCotizacion} className="bg-destructive hover:bg-destructive/90">
+                    Eliminar
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
         </div>
       </div>
@@ -123,6 +263,22 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
       {cotizacion.motivo_resolucion && (
         <div className="p-3 bg-rtb-surface/60 rounded-lg text-sm text-muted-foreground">
           <span className="font-semibold">Motivo de resolución:</span> {cotizacion.motivo_resolucion}
+        </div>
+      )}
+
+      {cotizacion.estado === 'en_devolucion' && devolucion && (
+        <div className="p-3 bg-accent/10 rounded-lg text-sm space-y-1">
+          <p>
+            <span className="font-semibold">Devolución {devolucion.folio}</span> — {devolucion.motivo}
+          </p>
+          {devolucion.valor_entregado != null && (
+            <p className="text-muted-foreground">Valor entregado: {formatearMoneda(devolucion.valor_entregado)}</p>
+          )}
+          {puedeAdministrar && (
+            <Link href="/dashboard/ventas/devoluciones" className="text-rtb-teal hover:underline">
+              Ver la devolución
+            </Link>
+          )}
         </div>
       )}
 
@@ -141,7 +297,7 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
           </thead>
           <tbody>
             {lineasActivas.map((l) => (
-              <LineaRow key={l.id} linea={l} puedeEditar={puedeEditar} />
+              <LineaRow key={l.id} linea={l} puedeEditar={puedeEditar} esBorrador={esBorrador} />
             ))}
             {lineasActivas.length === 0 && (
               <tr>
@@ -155,11 +311,154 @@ export function CotizacionDetalle({ cotizacion, lineasIniciales: lineas, rol, us
       </div>
 
       {puedeEditar && <AgregarLineaForm cotizacionId={cotizacion.id} entidadId={cotizacion.entidad_id} />}
+
+      {envios.length > 0 && <EnviosHistorial envios={envios} nombresUsuarios={nombresUsuarios} />}
     </div>
   );
 }
 
-function LineaRow({ linea, puedeEditar }: { linea: CotizacionLineaRow; puedeEditar: boolean }) {
+function EnviosHistorial({ envios, nombresUsuarios }: { envios: CotizacionEnvioRow[]; nombresUsuarios: Record<string, string> }) {
+  const formateador = new Intl.DateTimeFormat('es-MX', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return (
+    <div className="bg-white rounded-xl p-5 space-y-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
+      <h2 className="text-sm font-display font-semibold text-rtb-navy">Envíos por correo</h2>
+      <ul className="space-y-2">
+        {envios.map((e) => (
+          <li key={e.id} className="flex items-start gap-2 text-sm">
+            {e.resultado === 'exitoso' ? (
+              <CheckCircle2 className="w-4 h-4 text-rtb-teal shrink-0 mt-0.5" />
+            ) : (
+              <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            )}
+            <div>
+              <span>
+                {e.para}
+                {e.cc.length > 0 && <span className="text-muted-foreground"> (cc: {e.cc.join(', ')})</span>}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {formateador.format(new Date(e.enviado_at))}
+                {e.enviado_por && ` · ${nombresUsuarios[e.enviado_por] ?? '—'}`}
+              </span>
+              {e.resultado === 'fallido' && e.error_detalle && (
+                <span className="block text-xs text-destructive mt-0.5">{e.error_detalle}</span>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EnviarCorreoDialog({
+  cotizacionId,
+  folio,
+  correoSugerido,
+  deshabilitado,
+}: {
+  cotizacionId: string;
+  folio: string;
+  correoSugerido: string | null;
+  deshabilitado: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const { ejecutar, ocupado, error, setError } = useAccionServidor();
+  // Estado local sólo del formulario en captura — el patrón ya establecido
+  // (ver comentario de CotizacionDetalle arriba): lo que el servidor no
+  // sabe, no lo que ya vive ahí.
+  const [para, setPara] = useState(correoSugerido ?? '');
+  const [cc, setCc] = useState('');
+  const [asunto, setAsunto] = useState(`Cotización ${folio} — RTB Refacciones`);
+  const [mensaje, setMensaje] = useState('');
+
+  const enviar = async () => {
+    if (!para.trim()) {
+      setError('Captura el correo del destinatario.');
+      return;
+    }
+    const ccLista = cc
+      .split(/[,;]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const res = await ejecutar(`/api/ventas/cotizaciones/${cotizacionId}/correo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ para: para.trim(), cc: ccLista, asunto: asunto.trim(), mensaje: mensaje.trim() || undefined }),
+    });
+    if (!res.ok) return;
+    toast.success(`Cotización enviada a ${para.trim()}.`);
+    setOpen(false);
+    setMensaje('');
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" disabled={deshabilitado} title={deshabilitado ? 'Agrega al menos una línea' : ''}>
+          <Mail className="w-4 h-4 mr-1" /> Enviar por correo
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Enviar cotización por correo</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs">Para</Label>
+            <Input
+              type="email"
+              value={para}
+              onChange={(e) => setPara(e.target.value)}
+              placeholder="cliente@empresa.com"
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">CC (opcional, separados por coma)</Label>
+            <Input value={cc} onChange={(e) => setCc(e.target.value)} className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Asunto</Label>
+            <Input value={asunto} onChange={(e) => setAsunto(e.target.value)} className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Mensaje (opcional)</Label>
+            <Textarea
+              value={mensaje}
+              onChange={(e) => setMensaje(e.target.value)}
+              rows={3}
+              placeholder="Un párrafo adicional antes del cuerpo estándar del correo…"
+              className="mt-1"
+            />
+          </div>
+          {error && <p className="text-xs text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button onClick={enviar} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            {ocupado && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+            Enviar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function LineaRow({
+  linea,
+  puedeEditar,
+  esBorrador,
+}: {
+  linea: CotizacionLineaRow;
+  puedeEditar: boolean;
+  esBorrador: boolean;
+}) {
   const { ejecutar, ocupado, error } = useAccionServidor();
 
   const patch = (body: Record<string, unknown>) =>
@@ -168,6 +467,14 @@ function LineaRow({ linea, puedeEditar }: { linea: CotizacionLineaRow; puedeEdit
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+
+  // Borrador: DELETE real, nunca se mostró al cliente. Enviada: sigue
+  // siendo activo:false — el documento que el cliente ya vio conserva su
+  // rastro (decisión confirmada, 039).
+  const quitar = () =>
+    esBorrador
+      ? ejecutar(`/api/ventas/cotizaciones/${linea.cotizacion_id}/lineas/${linea.id}`, { method: 'DELETE' })
+      : patch({ activo: false });
 
   if (linea.en_consulta) {
     return (
@@ -202,7 +509,12 @@ function LineaRow({ linea, puedeEditar }: { linea: CotizacionLineaRow; puedeEdit
         </td>
         {puedeEditar && (
           <td className="py-2 px-3">
-            <button onClick={() => patch({ activo: false })} disabled={ocupado} className="text-destructive">
+            <button
+              onClick={quitar}
+              disabled={ocupado}
+              title={esBorrador ? 'Borrar línea' : 'Quitar del documento enviado'}
+              className="text-destructive"
+            >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </td>
@@ -229,7 +541,12 @@ function LineaRow({ linea, puedeEditar }: { linea: CotizacionLineaRow; puedeEdit
       <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatearMoneda(linea.importe)}</td>
       {puedeEditar && (
         <td className="py-2 px-3">
-          <button onClick={() => patch({ activo: false })} disabled={ocupado} className="text-destructive">
+          <button
+            onClick={quitar}
+            disabled={ocupado}
+            title={esBorrador ? 'Borrar línea' : 'Quitar del documento enviado'}
+            className="text-destructive"
+          >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </td>

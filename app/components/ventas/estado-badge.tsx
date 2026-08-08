@@ -2,6 +2,7 @@ import { cn } from '@/lib/utils';
 import type {
   ClienteCarteraEstado,
   ConsultaEstado,
+  DevolucionEstado,
   NrEstado,
   PedidoEstado,
   PoEstado,
@@ -13,6 +14,8 @@ import {
   CLIENTE_CARTERA_ESTADO_TONO,
   CONSULTA_ESTADO_LABELS,
   CONSULTA_ESTADO_TONO,
+  DEVOLUCION_ESTADO_LABELS,
+  DEVOLUCION_ESTADO_TONO,
   NR_ESTADO_LABELS,
   NR_ESTADO_TONO,
   PEDIDO_ESTADO_LABELS,
@@ -86,6 +89,10 @@ export function VinculoEstadoBadge({ estado, className }: { estado: VinculoEstad
 
 export function ConsultaEstadoBadge({ estado, className }: { estado: ConsultaEstado; className?: string }) {
   return <Badge tono={CONSULTA_ESTADO_TONO[estado]} label={CONSULTA_ESTADO_LABELS[estado]} className={className} />;
+}
+
+export function DevolucionEstadoBadge({ estado, className }: { estado: DevolucionEstado; className?: string }) {
+  return <Badge tono={DEVOLUCION_ESTADO_TONO[estado]} label={DEVOLUCION_ESTADO_LABELS[estado]} className={className} />;
 }
 
 /** Estado de cartera (cliente_puede_operar(), 029) — NO es

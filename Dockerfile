@@ -13,6 +13,17 @@ RUN npm ci --legacy-peer-deps
 # ---------------------------------------------------------------------------
 FROM node:20-alpine AS dev
 WORKDIR /app
+# Chromium del sistema para la generación de PDF de cotizaciones
+# (app/lib/ventas/generar-pdf.ts, vía puppeteer-core). puppeteer-core NUNCA
+# descarga su propio binario — apunta aquí por PUPPETEER_EXECUTABLE_PATH.
+# ttf-freefont/font-noto no son opcionales: sin fuentes del sistema Chromium
+# dibuja cuadritos en vez de texto (aunque la plantilla también embebe sus
+# propias fuentes vía @font-face en base64, un fallback sin fuentes del
+# sistema deja sin glifos cualquier carácter fuera de esa fuente embebida).
+RUN apk add --no-cache \
+      chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 COPY --from=deps /app/node_modules ./node_modules
 COPY app/ .
 EXPOSE 3000
@@ -50,6 +61,14 @@ ENV NODE_ENV=production
 # puede quedarse en localhost y no responder al puerto publicado por Docker.
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+
+# Chromium del sistema, igual que en el stage `dev` (ver comentario ahí) —
+# va ANTES de crear el usuario no-root: apk necesita privilegios de root,
+# que `USER nextjs` retira más abajo para el resto del stage.
+RUN apk add --no-cache \
+      chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 RUN addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs

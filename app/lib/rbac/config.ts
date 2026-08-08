@@ -22,6 +22,7 @@ import {
   FileCheck2,
   Snowflake,
   HelpCircle,
+  Undo2,
 } from 'lucide-react';
 import { type NavSection, type NavItem } from '@/types/navigation';
 import { type UserRole } from '@/types/database';
@@ -202,6 +203,12 @@ export const NAV_SECTIONS: NavSection[] = [
             roles: ACCESO_PANTALLA.excepciones,
           },
           { label: 'Consultas', href: '/dashboard/ventas/consultas', icon: HelpCircle, roles: ACCESO_PANTALLA.consultas },
+          {
+            label: 'Devoluciones',
+            href: '/dashboard/ventas/devoluciones',
+            icon: Undo2,
+            roles: ACCESO_PANTALLA.devoluciones,
+          },
         ],
       },
       {

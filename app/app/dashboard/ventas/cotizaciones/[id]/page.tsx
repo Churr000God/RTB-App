@@ -12,7 +12,7 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
 
   const { data: cotizacion } = await supabase
     .from('ventas_cotizaciones')
-    .select('*, entidades(nombre_comercial, nombre_legal, rfc)')
+    .select('*, entidades(nombre_comercial, nombre_legal, rfc, correo_principal)')
     .eq('id', params.id)
     .maybeSingle();
   if (!cotizacion) notFound();
@@ -23,5 +23,64 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
     .eq('cotizacion_id', params.id)
     .order('created_at', { ascending: true });
 
-  return <CotizacionDetalle cotizacion={cotizacion as any} lineasIniciales={lineas ?? []} rol={auth.profile.role} userId={auth.userId} />;
+  // Contacto principal + historial de envíos por correo (042) — para
+  // prellenar el diálogo "Enviar por correo" y mostrar el historial sin
+  // que cotizacion-detalle.tsx tenga que pedirlos aparte al cliente (mismo
+  // criterio del resto del módulo: el Server Component es la única fuente
+  // de verdad, ver contexto/AUDITORIA_RTB-VEN-01.md §7.3).
+  const [{ data: contacto }, { data: envios }] = await Promise.all([
+    supabase
+      .from('contactos')
+      .select('nombre, correo')
+      .eq('entidad_id', cotizacion.entidad_id)
+      .eq('es_principal', true)
+      .eq('activo', true)
+      .maybeSingle(),
+    supabase
+      .from('ventas_cotizacion_envios')
+      .select('*')
+      .eq('cotizacion_id', params.id)
+      .order('enviado_at', { ascending: false })
+      .limit(10),
+  ]);
+
+  // profiles_select limita cada usuario a su propia fila — el nombre de
+  // quien envió sólo se resuelve por usuarios_directorio() (RPC), nunca
+  // por un embed a profiles (mismo patrón que el resto del módulo).
+  let nombresUsuarios: Record<string, string> = {};
+  if (envios && envios.length > 0) {
+    const { data: directorio } = await supabase.rpc('usuarios_directorio');
+    nombresUsuarios = Object.fromEntries(
+      ((directorio ?? []) as { id: string; full_name: string | null }[]).map((u) => [u.id, u.full_name ?? '—'])
+    );
+  }
+
+  const correoSugerido = contacto?.correo ?? cotizacion.entidades?.correo_principal ?? null;
+
+  // Sólo se consulta si aplica: en cualquier otro estado no puede existir
+  // una devolución ligada (nace únicamente por ventas_cotizacion_cancelar()
+  // al pasar a 'en_devolucion').
+  let devolucion = null;
+  if (cotizacion.estado === 'en_devolucion') {
+    const { data } = await supabase
+      .from('ventas_devoluciones')
+      .select('*')
+      .eq('cotizacion_id', params.id)
+      .maybeSingle();
+    devolucion = data;
+  }
+
+  return (
+    <CotizacionDetalle
+      cotizacion={cotizacion as any}
+      lineasIniciales={lineas ?? []}
+      rol={auth.profile.role}
+      userId={auth.userId}
+      devolucion={devolucion}
+      correoSugerido={correoSugerido}
+      contactoNombre={contacto?.nombre ?? null}
+      envios={(envios ?? []) as any}
+      nombresUsuarios={nombresUsuarios}
+    />
+  );
 }

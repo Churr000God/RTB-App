@@ -4,9 +4,10 @@
 // `as const` que alimentan z.enum(...) sin duplicar literales.
 
 import type { ProductoResumen } from './inventario';
+import type { CanalOrigen } from './entidades';
 
 export const VENTAS_COTIZACION_ESTADOS = [
-  'borrador', 'enviada', 'aprobada', 'rechazada', 'expirada', 'cancelada',
+  'borrador', 'enviada', 'aprobada', 'rechazada', 'expirada', 'cancelada', 'en_devolucion',
 ] as const;
 export type VentasCotizacionEstado = (typeof VENTAS_COTIZACION_ESTADOS)[number];
 
@@ -20,9 +21,12 @@ export const CONSULTA_URGENCIAS = ['normal', 'alta', 'critica'] as const;
 export type ConsultaUrgencia = (typeof CONSULTA_URGENCIAS)[number];
 
 export const PEDIDO_ESTADOS = [
-  'aprobado', 'liberado', 'en_preparacion', 'entregado_parcial', 'entregado', 'cerrado', 'cancelado',
+  'aprobado', 'liberado', 'en_preparacion', 'entregado_parcial', 'entregado', 'cerrado', 'cancelado', 'en_devolucion',
 ] as const;
 export type PedidoEstado = (typeof PEDIDO_ESTADOS)[number];
+
+export const DEVOLUCION_ESTADOS = ['pendiente', 'resuelta'] as const;
+export type DevolucionEstado = (typeof DEVOLUCION_ESTADOS)[number];
 
 export const APARTADO_NIVELES = ['reserva', 'compromiso'] as const;
 export type ApartadoNivel = (typeof APARTADO_NIVELES)[number];
@@ -92,6 +96,60 @@ export interface CotizacionRow {
   created_at: string;
 }
 
+/** Fila de public.ventas_cotizaciones_listado (038) — NO es CotizacionRow:
+ *  aplana el cliente (entidades) y agrega el total de líneas ACTIVAS.
+ *  ventas_cotizaciones no tiene columna de total y no debe tenerla — el
+ *  snapshot de precio vive en la línea (030). `total` es numeric(18,4)
+ *  serializado por PostgREST como float64: sólo para mostrar/ordenar,
+ *  nunca para una comparación de negocio (ver lib/ventas/validaciones.ts). */
+export interface CotizacionListadoRow {
+  id: string;
+  folio: string;
+  entidad_id: string;
+  entidad_clave: string | null;
+  entidad_siglas: string | null;
+  entidad_nombre_legal: string | null;
+  entidad_nombre_comercial: string | null;
+  vendedor_id: string | null;
+  canal_entrada: CanalOrigen;
+  medio_seguimiento: CanalOrigen | null;
+  moneda: string;
+  vigencia_hasta: string | null;
+  estado: VentasCotizacionEstado;
+  enviada_at: string | null;
+  resuelta_at: string | null;
+  motivo_resolucion: string | null;
+  observaciones: string | null;
+  created_at: string;
+  updated_at: string;
+  total: number;
+  lineas_count: number;
+  lineas_en_consulta: number;
+}
+
+/** Campo de fecha que puede elegir el selector de rango del listado.
+ *  'resolucion' cubre aprobada/rechazada/cancelada (resuelta_at es
+ *  genérico, 030 — no existe aprobada_at). */
+export const COTIZACION_FECHA_CAMPOS = ['creacion', 'envio', 'resolucion', 'vigencia'] as const;
+export type CotizacionFechaCampo = (typeof COTIZACION_FECHA_CAMPOS)[number];
+
+export const COTIZACION_ORDENES = ['reciente', 'antigua', 'monto_desc', 'monto_asc', 'vigencia'] as const;
+export type CotizacionOrden = (typeof COTIZACION_ORDENES)[number];
+
+export const COTIZACION_VIGENCIA_FILTROS = ['vigente', 'vencida'] as const;
+export type CotizacionVigenciaFiltro = (typeof COTIZACION_VIGENCIA_FILTROS)[number];
+
+export const COTIZACIONES_VISTAS = ['tablero', 'tabla'] as const;
+export type CotizacionesVista = (typeof COTIZACIONES_VISTAS)[number];
+
+/** Una columna del tablero — count real de la columna (no data.length, que
+ *  está acotado por el tope de tarjetas). */
+export interface CotizacionTableroColumna {
+  estado: VentasCotizacionEstado;
+  count: number;
+  data: CotizacionListadoRow[];
+}
+
 export interface CotizacionLineaRow {
   id: string;
   cotizacion_id: string;
@@ -137,6 +195,27 @@ export interface ConsultaComprasRow {
   created_at: string;
 }
 
+export const VENTAS_ENVIO_RESULTADOS = ['exitoso', 'fallido'] as const;
+export type VentasEnvioResultado = (typeof VENTAS_ENVIO_RESULTADOS)[number];
+
+/** Fila de public.ventas_cotizacion_envios (042) — bitácora append-only de
+ *  cada intento de envío por correo del PDF de una cotización. */
+export interface CotizacionEnvioRow {
+  id: string;
+  cotizacion_id: string;
+  para: string;
+  cc: string[];
+  asunto: string;
+  mensaje: string | null;
+  adjunto_nombre: string | null;
+  resultado: VentasEnvioResultado;
+  proveedor: string;
+  mensaje_id: string | null;
+  error_detalle: string | null;
+  enviado_por: string | null;
+  enviado_at: string;
+}
+
 export interface PedidoRow {
   id: string;
   folio: string;
@@ -147,6 +226,8 @@ export interface PedidoRow {
   requiere_po: boolean;
   estado: PedidoEstado;
   liberado_at: string | null;
+  cancelado_at: string | null;
+  motivo_cancelacion: string | null;
   created_at: string;
 }
 
@@ -177,6 +258,32 @@ export interface NotaRemisionRow {
   valor_total: number | null;
   ultimo_contacto_at: string | null;
   nota_ultimo_contacto: string | null;
+  cancelado_at: string | null;
+  motivo_cancelacion: string | null;
+}
+
+/** Fila de public.ventas_devoluciones (039/041) — seguimiento básico de
+ *  devoluciones. Nace únicamente por ventas_cotizacion_cancelar() cuando el
+ *  pedido asociado ya muestra entrega; se cierra únicamente por
+ *  ventas_devolucion_resolver(). Sin reembolso/factura real todavía —
+ *  Facturación (RTB-PRO-FAC-01) no existe. */
+export interface DevolucionRow {
+  id: string;
+  folio: string;
+  cotizacion_id: string;
+  pedido_id: string;
+  nr_id: string | null;
+  entidad_id: string;
+  motivo: string;
+  estado: DevolucionEstado;
+  valor_entregado: number | null;
+  registrado_por: string | null;
+  resuelta_at: string | null;
+  resuelta_por: string | null;
+  notas_resolucion: string | null;
+  created_at: string;
+  /** Embed PostgREST `entidades(nombre_comercial, nombre_legal)`. */
+  entidades?: { nombre_comercial: string | null; nombre_legal: string } | null;
 }
 
 export interface TableroNrRow {

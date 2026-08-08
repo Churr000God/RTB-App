@@ -73,6 +73,12 @@ export default async function VentasDashboardPage() {
       alerta: true,
       href: ACCESO_PANTALLA.congelamientos.includes(rol) ? '/dashboard/ventas/congelamientos?estado=activo' : null,
     },
+    {
+      label: 'Devoluciones pendientes',
+      valor: kpis?.devoluciones_pendientes ?? 0,
+      alerta: true,
+      href: ACCESO_PANTALLA.devoluciones.includes(rol) ? '/dashboard/ventas/devoluciones?estado=pendiente' : null,
+    },
   ];
 
   return (
