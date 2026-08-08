@@ -102,11 +102,13 @@ export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol }: Props) {
       <SeguimientoCard nrId={nr.id} seguimientos={seguimientos} />
 
       <div className="p-4 bg-rtb-surface/60 rounded-lg text-sm text-muted-foreground">
-        Para vincular la PO del cliente contra esta NR, ve a{' '}
+        El respaldo por PO de una NR (Vía A: la PO llega DESPUÉS de la entrega) está pendiente de reconstruir — las
+        tarjetas de arriba seguirán en $0 hasta entonces. Si el cliente ya emitió su PO al momento de aprobar, esa
+        venta se registra directo como{' '}
         <Link href="/dashboard/ventas/ordenes-compra" className="text-rtb-teal hover:underline font-medium">
-          Órdenes de Compra
+          Orden de Compra
         </Link>{' '}
-        y registra o valida la PO — el cruce se hace por partida, no desde aquí.
+        desde la cotización, sin pasar por una NR.
       </div>
     </div>
   );

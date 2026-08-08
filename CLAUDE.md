@@ -78,7 +78,7 @@ de RTB-PRO-FAC-01)
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
 | 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
 | 3 | RTB-INV-01 Productos, Costos e Inventario (catálogo, kardex, conteos, discrepancias, ajustes) | ✅ Base funcional (auditado 2026-08-05) |
-| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por partida) | ✅ Base funcional (auditado 2026-08-07, hallazgo crítico y defectos de UX corregidos el mismo día) — Vía B sin NR pendiente |
+| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO nace al aprobar) | ✅ Base funcional (auditado 2026-08-07, hallazgo crítico y defectos de UX corregidos el mismo día) — Vía B cerrada 2026-08-08 (043/044); Vía A (PO tardía) pendiente |
 | 5 | Compras | 🔜 Planificado |
 | 6 | Almacén | 🔜 Planificado |
 | 7 | Rutas | 🔜 Planificado |
@@ -443,6 +443,27 @@ contra Supabase — ver TODO.
   `SECURITY DEFINER` — hace falta una columna que identifique la relación
   real (aquí, la línea de origen), no un timestamp que dentro de la misma
   transacción no avanza.
+- **Una segunda FK entre las mismas dos tablas rompe el embed implícito de
+  PostgREST — en silencio si nadie mira `error`.** Al añadir
+  `ventas_po_partidas_po_pedido_fkey (po_id, pedido_id) → (id, pedido_id)`
+  (043, para que la partida no pueda apuntar a un pedido distinto del de su
+  PO), `ventas_po_partidas` quedó con **dos** FK hacia
+  `ventas_ordenes_compra_cliente` (la original `po_id → id`, más esta
+  compuesta). Un embed implícito sin desambiguar
+  (`partidas:ventas_po_partidas(...)`) desde el lado de la PO/pedido pasó a
+  ser ambiguo para PostgREST (PGRST201) — y como el código desestructuraba
+  sólo `{ data }` sin mirar `error` (mismo patrón ya documentado del
+  gotcha de `.update()`/`.select()`), el síntoma no fue un error visible
+  sino un botón que simplemente nunca aparecía ("Surtir PO" en el detalle
+  del pedido, encontrado en la verificación clic a clic de 043/044). Se
+  corrige con el hint de relación explícito:
+  `partidas:ventas_po_partidas!ventas_po_partidas_po_id_fkey(...)`. Una
+  consulta **directa** a la tabla hija filtrando por la columna
+  (`.from('ventas_po_partidas').eq('po_id', ...)`, sin atravesar la
+  relación) no sufre esto — sólo el embed que PostgREST tiene que resolver
+  solo. Regla general: añadir una FK compuesta nueva entre dos tablas que
+  ya tenían una FK simple obliga a revisar cada embed implícito existente
+  entre ellas, en ambos sentidos.
 
 ## Historial de decisiones
 
@@ -1382,6 +1403,147 @@ contra Supabase — ver TODO.
   sesión (incluido el cierre) en
   `sessions/2026-08-08-pdf-cotizacion-correo-mailersend.md`.
 
+- **2026-08-08 (sesión aparte, cierre de jornada) — RTB-VEN-01: la PO nace
+  al aprobar la cotización (Vía B), ciclo de surtido nuevo, explorer para
+  Órdenes de Compra.** Pedido del dueño del proyecto: al aprobar una
+  cotización se pregunta si se aprueba con Nota de Remisión o con Orden de
+  Compra del cliente; si es PO, ésta nace ahí mismo con sus partidas
+  copiadas 1:1 del pedido — nunca más un alta manual — y admite subir el
+  archivo de PO que manda el cliente (al aprobar, opcional, o después
+  desde el detalle). Consecuencia aceptada explícitamente: como la PO ya
+  nace de datos consistentes, la validación por partida contra una NR deja
+  de tener sentido, así que se retiran los estados `recibida`/`vinculada`
+  y toda la maquinaria de validación de la Vía A (`ventas_po_validar()`,
+  `ventas_vinculo_cancelar()`) — la Vía A (PO que llega DESPUÉS de una NR)
+  queda pendiente para otra sesión, ver TODO. Plan validado por un segundo
+  pase de arquitectura antes de escribir código, que encontró 3 errores
+  que habrían roto la migración o dejado un bug de datos (orden
+  `language sql` vs. swap de enum, `ALTER COLUMN ... DROP DEFAULT`
+  faltante antes del `ALTER COLUMN TYPE`, y `valor_entregado` de una
+  devolución de Vía B calculado sobre `ventas_nr_lineas` — tabla vacía en
+  ese caso, habría dado `$0.00` mintiendo) y una consecuencia no obvia
+  (Autorizaciones se queda sin productor).
+
+  Dos migraciones: `043_ventas_po_ciclo_surtido.sql` (esquema — swap del
+  enum `po_estado` a `abierta → parcialmente_surtida → surtida →
+  facturada → pagada_cerrada` + `cancelada`, siguiendo el orden exacto
+  verificado contra `pg_depend` antes de escribir nada; columnas nuevas en
+  `ventas_ordenes_compra_cliente`/`ventas_po_partidas`; cierre del alta
+  manual — `revoke insert`, sin GRANT UPDATE tampoco: adjuntar evidencia
+  se hace por función; vista `ventas_ordenes_compra_listado` con el mismo
+  patrón "explorer" de `038`; las 2 PO de QA existentes, sin
+  `cotizacion_id`, se remapean a `cancelada` explícita con motivo, no se
+  dejan como "abierta" fantasma) y `044_ventas_po_funciones.sql`
+  (funciones — cada una partida del cuerpo **vivo** vía
+  `pg_get_functiondef()`, nunca del texto de una migración vieja:
+  `ventas_kpis()`/`tiene_operaciones_abiertas()` con el ciclo de PO nuevo,
+  `ventas_cotizacion_aprobar()` con la bifurcación `via`,
+  `ventas_nr_emitir()` rechazando un pedido de Vía B,
+  `ventas_po_adjuntar_evidencia()`/`ventas_po_despachar()`/
+  `ventas_po_cancelar()` nuevas, y `ventas_cotizacion_cancelar()`
+  corregida para el bug de `valor_entregado` de arriba). `ventas_po_despachar()`
+  es un espejo estricto de `ventas_nr_despachar()`: mismo emparejamiento
+  por `pedido_linea_id` (035) para no reintroducir el hallazgo crítico #1
+  de esa sesión, mismo patrón de consumir-luego-reinsertar el remanente
+  del apartado, mismos casts explícitos de enum en el `CASE`.
+  `ventas_po_cancelar()` se creó pero **sin botón en la UI** — la
+  cancelación de negocio real sigue siendo "Cancelar cotización", que
+  ahora también cancela la PO en la rama sin entrega (UPDATE directo, no
+  llamando a `ventas_po_cancelar()`, porque esa función exige un conjunto
+  de roles más estrecho que quien puede cancelar una cotización).
+
+  Verificado exhaustivo con SQL simulando rol real dentro de
+  `BEGIN`/`ROLLBACK` (creando cotizaciones/líneas de prueba a mano cuando
+  hacía falta un escenario que los datos reales no cubrían — dos líneas
+  del mismo producto en una PO, para repetir el escenario exacto del
+  hallazgo crítico #1 pero contra `ventas_po_despachar()`): aprobar como
+  PO con partidas 1:1 sin huecos, número de PO duplicado con mensaje de
+  negocio (`22023`) en vez de `23505` crudo, `ventas_nr_emitir()` sobre
+  Vía B rechazado, despacho fuera de orden con desambiguación correcta por
+  `pedido_linea_id` (ninguna partida tocó la reserva de la otra), despacho
+  parcial con remanente correcto, permisos negativos (`compras` no puede
+  liberar/despachar; `authenticated` ya no puede insertar una PO
+  directo), `evidencia_path` sólo por función, y las dos ramas de
+  `ventas_cotizacion_cancelar()` (devolución con `valor_entregado ≠ 0`
+  para Vía B; cancelación limpia que también cancela la PO).
+  `get_advisors` sin `ERROR` nuevo, `npx tsc --noEmit` y
+  `docker build --target builder` limpios.
+
+  **Clic a clic real con `qa.ventas`/`qa.almacen`** (nunca la cuenta del
+  dueño del proyecto — sesión previa había dejado una sesión de
+  `super_admin` abierta en el mismo perfil de Chrome, se cerró antes de
+  empezar): `COT-000068` aprobada como PO con número real → `POC-000027`
+  creada con su partida → pedido liberado a Almacén → surtido parcial (2
+  de 3) y luego completo desde el detalle del pedido (Almacén nunca entra
+  a la pantalla de Órdenes de Compra — decisión del dueño del proyecto,
+  el botón "Surtir PO" vive en el pedido) → kardex real confirmado por SQL
+  directo (`MOV-00000046`, `salida_venta`, `referencia_tipo=
+  'orden_compra_cliente'`) → PO `surtida`, pedido `entregado` → documento
+  de PO subido y visto con URL firmada real (bucket `evidencias-ventas`,
+  ruta de lectura firmada nueva, no existía ninguna para ese bucket) →
+  `qa.almacen` redirigido por el servidor fuera de
+  `/dashboard/ventas/ordenes-compra` (confirma que es un guard real, no
+  sólo el sidebar oculto) → KPI "PO por surtir" del tablero correcto.
+
+  Ese mismo recorrido encontró y corrigió un bug real no anticipado por
+  la verificación SQL: la FK compuesta nueva de `043`
+  (`ventas_po_partidas_po_pedido_fkey`) dejó **dos** relaciones entre
+  `ventas_po_partidas` y `ventas_ordenes_compra_cliente`, así que el embed
+  implícito `partidas:ventas_po_partidas(...)` (usado para traer la PO con
+  sus partidas junto al pedido) quedó ambiguo para PostgREST — y como el
+  código no miraba `error`, el síntoma fue el botón "Surtir PO" que nunca
+  aparecía, sin ningún error visible. Corregido con el hint de relación
+  explícito (`!ventas_po_partidas_po_id_fkey`) en los dos sitios que
+  hacían ese embed — ver Gotchas.
+
+  Alcance dejado fuera, documentado en TODO: Vía A completa (PO que llega
+  después de una NR — la maquinaria de vínculos y la bandeja de
+  Autorizaciones quedan intactas pero inertes, listas para cuando se
+  reconstruya), cierre de una PO tras resolver su devolución, y
+  `ventas_po_cancelar()` sin UI.
+
+- **2026-08-08 (corrección posterior, mismo día) — Surtir es sólo de
+  Almacén; `ventas` ya no despacha.** El dueño del proyecto corrigió dos
+  cosas tras revisar la entrega de arriba: (1) facturar una PO/NR es un
+  proceso **aparte** del surtido — se puede facturar antes de entregar o
+  después de entregar, no es una etapa que siga necesariamente a
+  `surtida`/`entregada` (ver TODO — todavía no aplica en código porque
+  ninguna función de este módulo escribe `facturada`/`pagada_cerrada`,
+  RTB-PRO-FAC-01 no existe; queda anotado para cuando se diseñe ese
+  módulo, no se tocó el modelo hoy). (2) Surtir es trabajo físico de
+  Almacén — se quitó `'ventas'` del guard de rol de **ambas** funciones
+  de despacho (`ventas_nr_despachar()` y `ventas_po_despachar()`,
+  migración `045`, mismo `ROLES_DESPACHAN` compartido por las dos desde
+  su diseño), y el botón "Surtir PO" del detalle del pedido ahora se
+  oculta para el rol `ventas` (`puedeSurtir`, mismo patrón que
+  `nr-detalle.tsx`). `super_admin`/`direccion`/`gerente_comercial`
+  conservan la capacidad como autoridad de override, no como flujo
+  normal. El dueño del proyecto también planteó que, cuando exista el
+  módulo de Almacén (hoy "Próximamente"), su propia pantalla sea
+  simplemente una vista de la misma tabla de pedidos/PO con la función de
+  surtir habilitada — no se construyó (el módulo no existe), queda como
+  nota de diseño para esa entrega futura. Verificado por SQL con rol real
+  (`ventas` bloqueado con `42501` en ambas funciones, `almacen` pasa el
+  guard) y `npx tsc --noEmit` limpio, y clic a clic real
+  (`qa.ventas` ya no ve "Surtir PO" en el detalle del pedido, `qa.almacen`
+  sí).
+
+  **Autocorrección durante la misma verificación:** `POST
+  /api/ventas/pedidos/[id]/liberar` reutilizaba `ROLES_DESPACHAN` — antes
+  de `045` coincidía por accidente con quién podía liberar, no por
+  diseño. Al quitarle `'ventas'` a `ROLES_DESPACHAN`, esa ruta también le
+  habría bloqueado a Ventas **liberar** el pedido a Almacén (acción que
+  el dueño del proyecto no pidió tocar, y que
+  `ventas_pedido_liberar_almacen()` sigue permitiendo en su propio
+  guard — mismo patrón ya documentado de "route vs SQL desalineados").
+  Encontrado por revisión de código antes de que llegara a producción,
+  no por el clic a clic. Corregido con una constante separada,
+  `ROLES_LIBERAN_ALMACEN` (`lib/ventas/permisos.ts`), que sí conserva
+  `'ventas'` — reutilizar una constante de permisos para una acción
+  distinta a la que describe su nombre es exactamente el tipo de atajo
+  que produce este desalineamiento; cada acción necesita su propia
+  constante aunque hoy coincida con otra.
+
 ## TODO
 
 - **MailerSend sin webhook.** `ventas_cotizacion_envios.resultado='exitoso'`
@@ -1422,39 +1584,55 @@ contra Supabase — ver TODO.
   en memoria que ya funciona sin resolver ningún problema de escala real.
   Revisar sólo si el criterio de acceso cambiara (p.ej. autoservicio de
   cuentas para terceros).
-- **RTB-VEN-01 — Vía B (PO directa del cliente, sin NR) sin implementar.**
-  El esquema de `032`/`033` está diseñado para admitirla (`ventas_notas_
-  remision` es `unique (pedido_id)` sólo porque esta entrega asumió una NR
-  por pedido, no porque el modelo lo exija) pero no existe ninguna función
-  de despacho que mueva kardex sin pasar por una NR — hoy todo pedido
-  aprobado necesita `ventas_nr_emitir()` antes de poder recibir un
-  `ventas_nr_despachar()`. Pendiente: decidir con el dueño del proyecto si
-  Vía B despacha contra la PO directamente (nueva función espejo de
-  `ventas_nr_despachar()` que consuma el apartado sin exigir `nr_id`) o si,
-  en la práctica, toda venta real de RTB pasa por NR y Vía B puede
-  descartarse del todo en vez de construirse.
+- **RTB-VEN-01 — Vía B cerrada (2026-08-08, migraciones 043/044); Vía A
+  (PO que llega DESPUÉS de una NR) queda pendiente, deliberadamente fuera
+  de esa entrega.** La PO ya nace dentro de
+  `ventas_cotizacion_aprobar()` cuando `via='orden_compra'`, con sus
+  partidas copiadas 1:1 del pedido, y se despacha directo al kardex con
+  `ventas_po_despachar()` (espejo de `ventas_nr_despachar()`) — ver
+  Historial. Lo que falta: cuando el cliente aprueba **sin** PO (se
+  remisiona por Vía A) y su PO llega semanas después, hoy no hay dónde
+  registrarla — el alta manual de PO se retiró junto con
+  `ventas_po_validar()`/`ventas_vinculo_cancelar()` y la maquinaria de
+  vínculos PO↔NR por partida. Las tablas (`ventas_po_nr_vinculos`, enum
+  `vinculo_estado`, sus 2 constraint triggers diferidos) y la bandeja de
+  Autorizaciones/`ventas_autorizacion_resolver()` se conservaron intactas
+  a propósito para esto — quedan inertes (sin GRANT de escritura) hasta
+  que se reconstruya. Consecuencia visible mientras tanto:
+  `ventas_nr_cobertura()` devuelve 0 de respaldo para toda NR nueva,
+  `nr_estado.parcialmente_respaldada`/`po_vinculada` quedan sin escritor,
+  y la bandeja de Autorizaciones no recibe solicitudes nuevas de PO
+  (excepción de subtotal/duplicidad).
 - **RTB-VEN-01 — reloj de cobranza y CFDI son RTB-PRO-FAC-01, módulo
   futuro.** `clientes.tipo_cliente` (029) ya guarda la configuración por
-  cliente y `nr_estado` (032) ya incluye `facturada`/`pagada_cerrada`, pero
-  ninguna función de esta entrega los escribe ni calcula antigüedad de
-  saldo vencido — el congelamiento de cartera (`cliente_congelamientos`)
-  se sigue registrando a mano por Dirección hasta que exista ese módulo.
-- **RTB-VEN-01 — permisos de PO entre vendedores, pregunta abierta para
-  el dueño del proyecto.** `ventas_ordenes_compra_cliente` no tiene
-  `vendedor_id` (a diferencia de `ventas_cotizaciones`/`ventas_pedidos`/
-  `ventas_notas_remision`, que sí lo tienen y lo usan en RLS) y
-  `ventas_po_validar()` (033) sólo comprueba `current_user_role()` — hoy
-  cualquier usuario `ventas` puede validar/vincular la PO de cualquier
-  cliente, sin importar quién cotizó. `030:165-168` sugiere que es
-  intencional ("una PO consolidada puede involucrar NR de otro vendedor
-  del mismo cliente"), pero el texto de proceso ("Registrar/validar una
-  PO: igual que cotizar") sugería lo contrario antes de aclararse en
-  `db/procesos/ciclo-de-venta.md` (§3.6 de
-  `contexto/AUDITORIA_RTB-VEN-01.md`). Deliberadamente **no** se cambió
-  autorización por suposición. Pregunta concreta a resolver: ¿una PO
-  consolidada de un cliente puede cubrir NR de varios vendedores? Si la
-  respuesta es no, la corrección es restringir `ventas_po_validar()` por
-  `vendedor_id` de las NR vinculadas — no requiere columna nueva.
+  cliente y `nr_estado`/`po_estado` (032/043) ya incluyen
+  `facturada`/`pagada_cerrada`, pero ninguna función de esta entrega los
+  escribe ni calcula antigüedad de saldo vencido — el congelamiento de
+  cartera (`cliente_congelamientos`) se sigue registrando a mano por
+  Dirección hasta que exista ese módulo. **Aviso del dueño del proyecto
+  (2026-08-08) para cuando se diseñe RTB-PRO-FAC-01:** facturar y
+  entregar son dos procesos independientes — una PO/NR se puede facturar
+  ANTES de entregarla o DESPUÉS de haberla entregado, no necesariamente
+  en ese orden. `po_estado`/`nr_estado` hoy modelan `facturada`/
+  `pagada_cerrada` como el tramo final de una cadena lineal después de
+  `surtida`/`entregada` — esa forma probablemente no alcanza para
+  representar "facturada antes de surtir". Al diseñar RTB-PRO-FAC-01,
+  evaluar si facturación necesita ser una dimensión/columna
+  **independiente** del estado de surtido (p. ej. una fecha/estado de
+  facturación aparte, en vez de un valor más del mismo enum) en lugar de
+  extender la cadena actual — no se tocó el modelo hoy porque ese módulo
+  no existe todavía y hacerlo sin sus requisitos reales sería adivinar.
+- **RTB-VEN-01 — permisos de PO entre vendedores: la pregunta original ya
+  no aplica a la Vía B, pero resurge tal cual con la Vía A.** `030:165-168`
+  discutía si una PO consolidada podía involucrar NR de otro vendedor del
+  mismo cliente — irrelevante ahora en Vía B (la PO nace del propio pedido
+  del vendedor que aprobó, mismo `vendedor_id`; `ventas_po_validar()`, que
+  era donde vivía la pregunta, se retiró en 043). Vuelve a ser una
+  pregunta real en cuanto se reconstruya la Vía A (TODO arriba): si esa
+  reconstrucción reintroduce algo como `ventas_po_validar()` para vincular
+  una PO tardía contra varias NR, decidir entonces si `vendedor_id` debe
+  filtrar qué NR puede cubrir cada usuario `ventas` — no asumir el
+  criterio viejo sin repreguntarlo.
 - **`gerente_comercial` en `clientes_update` (037), punto más probable de
   revisión.** Incluir a `gerente_comercial` en esa política le da
   autoridad sobre `limite_credito`/`descuento_maximo`/`vendedor_id` (ya

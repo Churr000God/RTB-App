@@ -25,6 +25,12 @@ export const PEDIDO_ESTADOS = [
 ] as const;
 export type PedidoEstado = (typeof PEDIDO_ESTADOS)[number];
 
+// Vía elegida al aprobar la cotización (043) — determina si el pedido se
+// surte por Nota de Remisión (ciclo NR, 032/035) o directo contra la PO del
+// cliente (Vía B, sin NR: ventas_po_despachar()).
+export const PEDIDO_VIAS = ['nota_remision', 'orden_compra'] as const;
+export type PedidoVia = (typeof PEDIDO_VIAS)[number];
+
 export const DEVOLUCION_ESTADOS = ['pendiente', 'resuelta'] as const;
 export type DevolucionEstado = (typeof DEVOLUCION_ESTADOS)[number];
 
@@ -37,9 +43,12 @@ export const NR_ESTADOS = [
 ] as const;
 export type NrEstado = (typeof NR_ESTADOS)[number];
 
+// Ciclo de surtido de la Vía B (043) — sustituye al ciclo de validación por
+// partida de 033 (recibida/en_validacion/parcialmente_vinculada/vinculada/
+// pendiente_de_confirmacion/rechazada/corregida), retirado porque la PO ya
+// nace de datos consistentes (copiados 1:1 del pedido al aprobar).
 export const PO_ESTADOS = [
-  'recibida', 'en_validacion', 'parcialmente_vinculada', 'vinculada',
-  'pendiente_de_confirmacion', 'rechazada', 'corregida', 'cancelada',
+  'abierta', 'parcialmente_surtida', 'surtida', 'facturada', 'pagada_cerrada', 'cancelada',
 ] as const;
 export type PoEstado = (typeof PO_ESTADOS)[number];
 
@@ -224,6 +233,7 @@ export interface PedidoRow {
   vendedor_id: string | null;
   moneda: string;
   requiere_po: boolean;
+  via: PedidoVia;
   estado: PedidoEstado;
   liberado_at: string | null;
   cancelado_at: string | null;
@@ -273,6 +283,9 @@ export interface DevolucionRow {
   cotizacion_id: string;
   pedido_id: string;
   nr_id: string | null;
+  /** Poblado (043) cuando la devolución nace de un pedido de Vía B
+   *  (nr_id queda NULL en ese caso). */
+  po_id: string | null;
   entidad_id: string;
   motivo: string;
   estado: DevolucionEstado;
@@ -310,6 +323,9 @@ export interface OrdenCompraClienteRow {
   numero_po: string;
   entidad_id: string;
   pedido_id: string | null;
+  /** Cotización que la aprobó como PO (043) — null en las PO relic de
+   *  Vía A, previas a este cambio. */
+  cotizacion_id: string | null;
   moneda: string;
   subtotal_declarado: number | null;
   total_declarado: number | null;
@@ -319,6 +335,11 @@ export interface OrdenCompraClienteRow {
   razon_social_declarada: string | null;
   rfc_declarado: string | null;
   estado: PoEstado;
+  surtida_at: string | null;
+  cancelada_at: string | null;
+  cancelada_por: string | null;
+  motivo_cancelacion: string | null;
+  /** Vestigiales de la Vía A (033) — sin escritor desde 043. */
   motivo_rechazo: string | null;
   duplicada_de: string | null;
   created_at: string;
@@ -327,6 +348,10 @@ export interface OrdenCompraClienteRow {
 export interface PoPartidaRow {
   id: string;
   po_id: string;
+  /** Poblados (043) cuando la partida nace de una línea de pedido de
+   *  Vía B — null en las partidas relic de Vía A. */
+  pedido_id: string | null;
+  pedido_linea_id: string | null;
   linea_numero: number;
   codigo_cliente: string | null;
   descripcion: string | null;
@@ -334,7 +359,66 @@ export interface PoPartidaRow {
   precio_unitario: number;
   subtotal: number;
   producto_id: string | null;
+  unidad_medida_id: string | null;
+  cantidad_entregada: number;
   codigo_divergente: boolean;
+  /** Embed PostgREST `productos(codigo_interno, nombre)`. */
+  productos?: ProductoResumen | null;
+}
+
+/** Fila de public.ventas_ordenes_compra_listado (045) — NO es
+ *  OrdenCompraClienteRow: aplana el cliente/pedido/cotización y agrega las
+ *  partidas. Mismo patrón que CotizacionListadoRow (038). */
+export interface OrdenCompraListadoRow {
+  id: string;
+  folio: string;
+  numero_po: string;
+  entidad_id: string;
+  entidad_clave: string | null;
+  entidad_siglas: string | null;
+  entidad_nombre_legal: string | null;
+  entidad_nombre_comercial: string | null;
+  pedido_id: string | null;
+  pedido_folio: string | null;
+  cotizacion_id: string | null;
+  cotizacion_folio: string | null;
+  moneda: string;
+  subtotal_declarado: number | null;
+  total_declarado: number | null;
+  fecha_po: string | null;
+  canal_entrega: string | null;
+  evidencia_path: string | null;
+  razon_social_declarada: string | null;
+  rfc_declarado: string | null;
+  estado: PoEstado;
+  surtida_at: string | null;
+  cancelada_at: string | null;
+  cancelada_por: string | null;
+  motivo_cancelacion: string | null;
+  recibida_por: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  partidas_count: number;
+  total: number;
+  cantidad_total: number;
+  cantidad_entregada_total: number;
+}
+
+/** Campo de fecha que puede elegir el selector de rango del listado de PO —
+ *  mismo patrón que CotizacionFechaCampo (038). */
+export const PO_FECHA_CAMPOS = ['creacion', 'fecha_po', 'surtido'] as const;
+export type PoFechaCampo = (typeof PO_FECHA_CAMPOS)[number];
+
+export const PO_ORDENES = ['reciente', 'antigua', 'monto_desc', 'monto_asc', 'fecha_po'] as const;
+export type PoOrden = (typeof PO_ORDENES)[number];
+
+/** Una columna del tablero de PO — count real de la columna (no
+ *  data.length, acotado por el tope de tarjetas). */
+export interface PoTableroColumna {
+  estado: PoEstado;
+  count: number;
+  data: OrdenCompraListadoRow[];
 }
 
 export interface PoNrVinculoRow {

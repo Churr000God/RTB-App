@@ -48,6 +48,10 @@ type Accion = 'select' | 'insert' | 'update' | 'delete';
  *    ventas_devolucion_resolver() (mismos roles que ROLES_AUTORIZAN, no
  *    'ventas' — abrirla es consecuencia de cancelar, cerrarla es un acto
  *    gerencial).
+ *  - 'ordenes_compra'/'po_partidas': SIN GRANT INSERT/UPDATE para ningún rol
+ *    desde 043 — la PO nace únicamente dentro de
+ *    ventas_cotizacion_aprobar() (Vía B), nunca de un alta manual. 'insert'
+ *    desapareció de ambos recursos a propósito, no es un olvido.
  */
 const MATRIZ: Record<RecursoVentas, Partial<Record<Accion, UserRole[]>>> = {
   cotizaciones: {
@@ -80,11 +84,15 @@ const MATRIZ: Record<RecursoVentas, Partial<Record<Accion, UserRole[]>>> = {
   },
   ordenes_compra: {
     select: TODOS_LOS_ROLES,
-    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+    // Sin insert/update por GRANT desde 043: nace dentro de
+    // ventas_cotizacion_aprobar() y transiciona sólo por función
+    // (ventas_po_despachar()/ventas_po_adjuntar_evidencia()/
+    // ventas_po_cancelar() — roles en ROLES_DESPACHAN/config de abajo).
   },
   po_partidas: {
     select: TODOS_LOS_ROLES,
-    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+    // Ídem: se copian 1:1 desde ventas_pedido_lineas al aprobar, ningún
+    // rol las inserta por GRANT.
   },
   vinculos: {
     select: TODOS_LOS_ROLES,
@@ -181,9 +189,33 @@ export function rolesQuePueden(recurso: RecursoVentas, accion: Accion): UserRole
  *  (comprobado en la función SQL, no sólo aquí). */
 export const ROLES_AUTORIZAN: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial'];
 
-/** Roles que pueden despachar una NR al kardex — espejo de
- *  ventas_nr_despachar() (037, sobre la base de 032/035). */
-export const ROLES_DESPACHAN: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial', 'almacen', 'ventas'];
+/** Roles que pueden despachar al kardex — espejo de ventas_nr_despachar()
+ *  (037, sobre la base de 032/035, 'ventas' retirado en 045) Y de
+ *  ventas_po_despachar() (044, Vía B): mismo conjunto de roles en ambas
+ *  funciones SQL, un solo lugar que actualizar si algún día divergen.
+ *  Surtir es trabajo físico de Almacén — 'ventas' se quitó a propósito
+ *  (045, pedido explícito del dueño del proyecto); `direccion`/
+ *  `gerente_comercial`/`super_admin` conservan la capacidad como
+ *  autoridad de override/soporte, no como flujo normal. En la UI, Almacén
+ *  despacha la PO desde el detalle del pedido (no tiene acceso a la
+ *  pantalla de Órdenes de Compra — ver ACCESO_PANTALLA.ordenes_compra). */
+export const ROLES_DESPACHAN: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial', 'almacen'];
+
+/** Roles que pueden liberar un pedido a Almacén (reserva → compromiso) —
+ *  espejo de ventas_pedido_liberar_almacen() (037), que SÍ conserva
+ *  'ventas' en su propio guard: liberar es el hand-off comercial hacia
+ *  Almacén, no el acto físico de surtir — 045 sólo pidió quitarle a
+ *  Ventas la segunda cosa. Constante separada a propósito de
+ *  ROLES_DESPACHAN: antes de 045 compartían el mismo arreglo porque
+ *  coincidían por accidente, no por diseño — reutilizar ROLES_DESPACHAN
+ *  aquí habría bloqueado a Ventas de liberar sin que nadie lo pidiera. */
+export const ROLES_LIBERAN_ALMACEN: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'almacen'];
+
+/** Roles que pueden adjuntar/reemplazar el documento de PO del cliente —
+ *  espejo de ventas_po_adjuntar_evidencia() (044). Sin 'almacen': ese
+ *  documento es responsabilidad de quien aprobó/da seguimiento comercial,
+ *  no de quien surte. */
+export const ROLES_ADJUNTAN_EVIDENCIA_PO: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial', 'ventas'];
 
 /** Roles que pueden responder una consulta de Compras-ligero — espejo de
  *  ventas_consulta_responder() (030). 'ventas' NUNCA está aquí: levanta la

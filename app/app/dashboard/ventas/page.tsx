@@ -56,10 +56,13 @@ export default async function VentasDashboardPage() {
         : null,
     },
     {
-      label: 'PO pendiente de confirmación',
-      valor: kpis?.po_pendiente_confirmacion ?? 0,
+      // 043: el ciclo de validación por partida de la Vía A se retiró —
+      // "PO por surtir" es el contador accionable del ciclo nuevo (abierta
+      // + parcialmente_surtida).
+      label: 'PO por surtir',
+      valor: kpis?.po_por_surtir ?? 0,
       href: ACCESO_PANTALLA.ordenes_compra.includes(rol)
-        ? '/dashboard/ventas/ordenes-compra?estado=pendiente_de_confirmacion'
+        ? '/dashboard/ventas/ordenes-compra?estado=abierta,parcialmente_surtida'
         : null,
     },
     {

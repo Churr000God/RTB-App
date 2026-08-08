@@ -3,71 +3,46 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
-import { poCreateSchema } from '@/lib/ventas/schemas';
-import { mensajeErrorPo } from '@/lib/ventas/errores';
-import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
+import { PO_TABLERO_TOPE } from '@/lib/ventas/config';
+import {
+  ORDENES_COMPRA_PAGE_SIZE,
+  ORDENES_COMPRA_VISTA,
+  aplicarFiltrosPo,
+  construirColumnasTableroPo,
+  ordenarPo,
+  parsearFiltrosPo,
+} from '@/lib/ventas/listado-ordenes-compra';
 
-const PAGE_SIZE = 20;
-
-// GET - listado de PO, paginado (mismo patrón que /api/inventario/hallazgos).
-// Facturación consulta en modo sólo lectura (para saber qué está a punto de
-// facturarse). Embed de entidades: nadie más consumía este GET hasta ahora
-// (el listado usaba Supabase directo en el Server Component, ver
-// ordenes-compra-explorer.tsx) — es aditivo, no rompe ningún contrato previo.
+// GET - listado de PO (045, patrón "explorer" calcado de
+// /api/ventas/cotizaciones): búsqueda, filtros de fecha, tablero por estado
+// o tabla paginada — mismo contrato dual (?vista=tablero) sobre
+// ventas_ordenes_compra_listado. Sin POST: la PO ya no se da de alta a mano
+// desde 043, nace dentro de ventas_cotizacion_aprobar() (Vía B).
 export async function GET(request: Request) {
   try {
     const { response } = await requireApiRole(ACCESO_PANTALLA.ordenes_compra);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);
-    const estado = searchParams.get('estado');
-    const entidadId = searchParams.get('entidad_id');
-    const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
-    const from = (page - 1) * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
-
     const supabase = createSupabaseServerClient();
-    let query = supabase
-      .from('ventas_ordenes_compra_cliente')
-      .select('*, entidades(nombre_comercial, nombre_legal)', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(from, to);
-    if (estado) query = query.eq('estado', estado);
-    if (entidadId) query = query.eq('entidad_id', entidadId);
+    const f = parsearFiltrosPo(searchParams);
+    const vista = searchParams.get('vista') === 'tablero' ? 'tablero' : 'lista';
+
+    if (vista === 'tablero') {
+      const tope = Math.min(50, Math.max(1, Number(searchParams.get('tope')) || PO_TABLERO_TOPE));
+      const columnas = await construirColumnasTableroPo(supabase, f, tope);
+      return NextResponse.json({ vista: 'tablero', columnas, count: columnas.reduce((n, c) => n + c.count, 0), tope });
+    }
+
+    let query = supabase.from(ORDENES_COMPRA_VISTA).select('*', { count: 'exact' });
+    query = aplicarFiltrosPo(query, f);
+    query = ordenarPo(query, f.orden).range((f.page - 1) * ORDENES_COMPRA_PAGE_SIZE, f.page * ORDENES_COMPRA_PAGE_SIZE - 1);
 
     const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ data: data ?? [], count: count ?? 0, page, pageSize: PAGE_SIZE });
-  } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
-  }
-}
-
-// POST - registra la PO del cliente. numero_po_normalizado (columna
-// generada, 033) es lo que respalda el índice único parcial — si el
-// cliente ya tiene una PO viva con ese número, es una posible duplicada
-// (documento §3 del dueño del proyecto): el error se traduce, no se
-// asume automáticamente cuál es la válida.
-export async function POST(request: Request) {
-  try {
-    const { response } = await requireApiRole(rolesQuePueden('ordenes_compra', 'insert'));
-    if (response) return response;
-
-    const parsed = poCreateSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos' }, { status: 400 });
-    }
-
-    const supabase = createSupabaseServerClient();
-    const { data, error } = await supabase
-      .from('ventas_ordenes_compra_cliente')
-      .insert(parsed.data)
-      .select('*')
-      .single();
-    if (error) return NextResponse.json({ error: mensajeErrorPo(error.message) }, { status: 400 });
-
-    return NextResponse.json({ success: true, data }, { status: 201 });
+    return NextResponse.json({ vista: 'lista', data: data ?? [], count: count ?? 0, page: f.page, pageSize: ORDENES_COMPRA_PAGE_SIZE });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }

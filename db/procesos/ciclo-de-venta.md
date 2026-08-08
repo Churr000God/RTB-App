@@ -30,21 +30,34 @@ Cotizar/enviar/aprobar/emitir NR: `ventas` (sólo sus propias
 cotizaciones/pedidos), `direccion`, `gerente_comercial`, `super_admin` sin
 restricción de dueño (`gerente_comercial`/`direccion`/`super_admin` operan
 sobre la cotización de cualquier vendedor).
-Despachar una NR y liberar un pedido a Almacén: los anteriores + `almacen`.
+Liberar un pedido a Almacén: los anteriores + `almacen`. **Despachar una
+NR o surtir una PO (`045`): `direccion`/`gerente_comercial`/`super_admin`
++ `almacen` — `ventas` YA NO puede, a propósito** (corrección de negocio
+del dueño del proyecto, misma jornada que `043`/`044`: surtir es trabajo
+físico de Almacén, no de Ventas). `ventas_po_despachar()` comparte el
+mismo conjunto de roles que `ventas_nr_despachar()` (`ROLES_DESPACHAN`,
+un solo lugar que actualizar) — en la UI, Almacén entra desde el detalle
+del **pedido**, no tiene acceso a `/dashboard/ventas/ordenes-compra`.
+Adjuntar/reemplazar el documento de PO: `ventas`/`direccion`/
+`gerente_comercial`/`super_admin` (`ventas_po_adjuntar_evidencia()`, sin
+cambios — adjuntar el documento no es "surtir").
 Responder una consulta de Compras-ligero: `compras`, `direccion`,
 `super_admin` — **nunca `ventas` ni `gerente_comercial`**, que sólo la
-levantan. Registrar/validar una PO: **por rol, no por dueño** — a
-diferencia de cotizaciones/pedidos, `ventas_ordenes_compra_cliente` no
-tiene `vendedor_id` y `ventas_po_validar()` sólo comprueba
-`current_user_role()`; cualquier usuario
-`ventas`/`direccion`/`gerente_comercial`/`super_admin` puede
-validar/vincular la PO de cualquier cliente. "Igual que cotizar" arriba se
-refiere sólo al conjunto de roles, no a la restricción de fila — ver
-`contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y el TODO de `CLAUDE.md`
-(pendiente de confirmar con el dueño del proyecto si una PO consolidada
-puede cubrir NR de varios vendedores). Cancelar un vínculo PO↔NR: los
-mismos que validan (`ventas`/`direccion`/`gerente_comercial`/`super_admin`),
-nunca si el vínculo ya está `aprobado_para_facturacion`/`facturado`.
+levantan.
+
+> **Vigente sólo para la Vía A (033/036), inerte desde 043 — párrafo
+> conservado para cuando se reconstruya.** Registrar/validar una PO: por
+> rol, no por dueño — a diferencia de cotizaciones/pedidos,
+> `ventas_ordenes_compra_cliente` no tiene `vendedor_id` y
+> `ventas_po_validar()` (retirada en `043`) sólo comprobaba
+> `current_user_role()`; cualquier usuario
+> `ventas`/`direccion`/`gerente_comercial`/`super_admin` podía
+> validar/vincular la PO de cualquier cliente. Ver
+> `contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y el TODO de `CLAUDE.md`
+> (pregunta que resurge si la Vía A reintroduce algo similar). Cancelar un
+> vínculo PO↔NR: los mismos que validaban, nunca si el vínculo ya estaba
+> `aprobado_para_facturacion`/`facturado`.
+
 Resolver una autorización de Ventas o una excepción de cartera:
 `direccion`/`gerente_comercial`/`super_admin`, y nunca el propio
 solicitante (estructural — `CHECK` + comprobación de identidad en la
@@ -92,12 +105,24 @@ activa, **ninguna línea en consulta**, vigencia definida, y que
 `cliente_puede_operar()` diga que sí (ver `bloqueo-y-aprobaciones.md` para
 el bloqueo administrativo — aquí además se checa congelamiento de
 cartera). `POST .../aprobar` (con evidencia: canal, adjunto, datos
-formales faltantes) hace, en una sola transacción
-(`ventas_cotizacion_aprobar()`, `031`): registra la evidencia, crea el
-pedido + sus líneas (copia inmutable del snapshot), y **una reserva por
-línea** (`inventario_apartados`, `nivel='reserva'`) en unidad base del
-producto. Si cualquier línea tiene una unidad de captura incompatible con
-el producto, la función entera se revierte — cero reservas huérfanas.
+formales faltantes, y desde `043` también `via`) hace, en una sola
+transacción (`ventas_cotizacion_aprobar()`, `031`, extendida en `043`/`044`):
+registra la evidencia, crea el pedido + sus líneas (copia inmutable del
+snapshot), y **una reserva por línea** (`inventario_apartados`,
+`nivel='reserva'`) en unidad base del producto. Si cualquier línea tiene
+una unidad de captura incompatible con el producto, la función entera se
+revierte — cero reservas huérfanas.
+
+`via` bifurca lo que pasa después, no lo de arriba: `'nota_remision'`
+(default) es el comportamiento de siempre — ver §4. `'orden_compra'`
+(Vía B, `043`) además, en la misma transacción, inserta la PO
+(`ventas_ordenes_compra_cliente`, con `numero_po` obligatorio — si el
+cliente aceptó pero aún no lo tiene, se aprueba como NR) y sus partidas
+copiadas 1:1 de las líneas del pedido (`ventas_po_partidas`, con
+`pedido_linea_id` poblado desde el nacimiento — no hay que esperar a un
+despacho para tenerlo, a diferencia de la NR). El pedido queda marcado
+`ventas_pedidos.via='orden_compra'`, lo que bloquea `ventas_nr_emitir()`
+sobre él (§4) y habilita `ventas_po_despachar()` en su lugar (§5).
 
 ## 3a. Documento (PDF) y envío por correo — independiente del flujo de estados
 
@@ -162,11 +187,13 @@ tocan: siguen documentando lo que de verdad se entregó.
 ## 4. NR (Vía A) y liberación a Almacén
 
 Antes de liberar el pedido, `POST /api/ventas/pedidos/[id]/nota-remision`
-emite la NR (una por pedido — Vía B, PO directa sin NR, queda fuera de
-esta entrega). Luego `POST .../liberar` promueve **todas** las reservas
-del pedido a `nivel='compromiso'` con un solo `UPDATE` — no toca
+emite la NR (una por pedido; rechaza con `42501` un pedido
+`via='orden_compra'` desde `044` — ese pedido ya tiene su PO, se surte por
+§5 sin NR). Luego `POST .../liberar` promueve **todas** las reservas del
+pedido a `nivel='compromiso'` con un solo `UPDATE` — no toca
 `cantidad_apartada`, así "disponible" nunca descuenta la misma pieza dos
-veces.
+veces. La liberación es el mismo paso para ambas vías — Vía B también la
+necesita antes de poder surtir (§5).
 
 ## 5. Despacho — el kardex real
 
@@ -200,14 +227,56 @@ línea desde que nace en `ventas_cotizacion_aprobar()`, y
 `uq_apartados_pedido_linea_activo` (como máximo una reserva activa por
 línea).
 
-## 6. PO del cliente y vínculos por partida
+**Despacho de Vía B (`ventas_po_despachar()`, `044`)** — mismo mecanismo,
+espejo estricto: `POST /api/ventas/ordenes-compra/[id]/despachar` con
+`{ lineas: [{ po_partida_id, cantidad }] }`. Requiere que el pedido esté
+`liberado`/`entregado_parcial` igual que la NR (§4), inserta el mismo
+`inventario_movimientos` (`salida_venta`, `referencia_tipo=
+'orden_compra_cliente'`, `referencia_folio` = folio de la PO), consume/
+reinserta el remanente del apartado por el mismo `pedido_linea_id`, y
+recalcula `po_estado` (`abierta → parcialmente_surtida → surtida`) y
+`pedido_estado` en el mismo `UPDATE`. La UI vive en el detalle del
+**pedido**, no en el de la PO — Almacén entra por ahí (no tiene acceso a
+`/dashboard/ventas/ordenes-compra`).
 
-`POST /api/ventas/ordenes-compra` registra la PO (folio interno
+## 6. PO del cliente — nace al aprobar, ya no se captura a mano
+
+**Rediseñado 2026-08-08 (043/044).** Antes de este cambio, la PO se
+registraba con `POST /api/ventas/ordenes-compra` y se validaba por
+partida contra la NR con `ventas_po_validar()` — ver la versión anterior
+de esta sección más abajo, sin editar, como registro de esa maquinaria
+(sigue viva en el esquema pero inerte, para la Vía A). Ahora, si la
+cotización se aprueba con `via='orden_compra'` (§3), la PO nace en la
+misma transacción de `ventas_cotizacion_aprobar()`: folio `POC-000000`,
+`numero_po` obligatorio (`numero_po_normalizado` respalda el mismo índice
+único parcial de siempre — dos PO con el mismo número para la misma
+entidad es un error de negocio, `22023`, no un `23505` crudo), y sus
+partidas copiadas 1:1 de `ventas_pedido_lineas` con `pedido_linea_id`
+poblado desde el nacimiento. El archivo que manda el cliente es opcional
+al aprobar y también se puede subir/reemplazar después
+(`PATCH .../evidencia`, `ventas_po_adjuntar_evidencia()`) — ambos caminos
+terminan en el mismo bucket privado `evidencias-ventas`; `GET
+.../evidencia` da la URL firmada de 60s para verlo (no existía ninguna
+ruta de lectura para ese bucket antes de esto).
+
+`po_estado` sigue el ciclo de surtido `abierta → parcialmente_surtida →
+surtida → facturada → pagada_cerrada` (+ `cancelada`) — ver §5 para el
+despacho. Ya no hay alta manual: `revoke insert` sobre
+`ventas_ordenes_compra_cliente`/`ventas_po_partidas` para `authenticated`,
+misma convención que `ventas_pedidos` (sólo `select` + funciones
+`SECURITY DEFINER`).
+
+<details>
+<summary>Versión anterior de esta sección (Vía A, validación por
+partida) — conservada como registro, la maquinaria sigue en el esquema
+pero inerte</summary>
+
+`POST /api/ventas/ordenes-compra` registraba la PO (folio interno
 `POC-000000`, `numero_po_normalizado` respalda el índice único parcial —
 una PO ya viva con ese número para la misma entidad es una posible
 duplicada, incidencia, no asunción automática). `POST .../[id]/partidas`
-captura cada renglón declarado por el cliente. `POST .../[id]/validar`
-(`ventas_po_validar()`, `033`) cruza, **siempre en SQL sobre `numeric`**
+capturaba cada renglón declarado por el cliente. `POST .../[id]/validar`
+(`ventas_po_validar()`, `033`) cruzaba, **siempre en SQL sobre `numeric`**
 (nunca comparando floats de JS):
 
 1. Moneda de la PO vs. la de cada NR involucrada → bloqueo si difieren.
@@ -220,27 +289,28 @@ captura cada renglón declarado por el cliente. `POST .../[id]/validar`
 5. Código de producto divergente → permitido con
    `aceptar_codigo_divergente` si costo/subtotal ya cuadraron.
 6. Duplicidad (la cobertura propuesta excedería lo entregado) → el
-   vínculo nace `rechazado_por_duplicidad` y la PO queda
+   vínculo nacía `rechazado_por_duplicidad` y la PO quedaba
    `pendiente_de_confirmacion`, salvo autorización `duplicidad_confirmada`.
 
-"Cantidad/monto respaldado por PO" se calcula siempre por agregación
-sobre `ventas_po_nr_vinculos` filtrando por estado — nunca un contador. Dos
-*constraint triggers* diferidos (`vinculo_valida_cobertura_nr`/`_partida`)
-son la última barrera contra el doble conteo.
+"Cantidad/monto respaldado por PO" se calculaba siempre por agregación
+sobre `ventas_po_nr_vinculos` filtrando por estado — nunca un contador.
+Dos *constraint triggers* diferidos (`vinculo_valida_cobertura_nr`/
+`_partida`) eran la última barrera contra el doble conteo.
 
 **Cancelar un vínculo capturado por error** (`ventas_vinculo_cancelar()`,
-`036`): nunca borra la fila — la marca `estado='cancelado'` con
+`036`): nunca borraba la fila — la marcaba `estado='cancelado'` con
 `cancelado_at`/`cancelado_por`/`motivo_cancelacion` (obligatorio), y
-recalcula el estado de la PO y de la NR **hacia atrás** (el `CASE` de
-`ventas_po_validar()` de arriba sólo avanza). Con cero vínculos activos en
-toda la PO, el estado vuelve a `en_validacion` (no `parcialmente_vinculada`,
-que con cero cobertura sería engañoso); la NR vuelve a `entregada_sin_po`
-si su cobertura llega a cero. Bloqueada si el vínculo ya está
-`aprobado_para_facturacion`/`facturado` — la corrección de un vínculo con
-consecuencia de facturación va por RTB-PRO-FAC-01 (nota de crédito), no por
-aquí. El índice `uq_vinculo_par` excluye `estado='cancelado'`, así que el
-mismo par partida↔línea de NR se puede volver a vincular después sin
-chocar.
+recalculaba el estado de la PO y de la NR **hacia atrás** (el `CASE` de
+`ventas_po_validar()` de arriba sólo avanzaba). Con cero vínculos activos
+en toda la PO, el estado volvía a `en_validacion` (no
+`parcialmente_vinculada`, que con cero cobertura sería engañoso); la NR
+volvía a `entregada_sin_po` si su cobertura llegaba a cero. Bloqueada si
+el vínculo ya estaba `aprobado_para_facturacion`/`facturado`. El índice
+`uq_vinculo_par` excluye `estado='cancelado'`, así que el mismo par
+partida↔línea de NR se puede volver a vincular después sin chocar —
+sigue siendo cierto, es lo que espera la Vía A cuando se reconstruya.
+
+</details>
 
 ## Qué puede fallar
 
@@ -251,14 +321,13 @@ chocar.
 | "No se puede crear/aprobar/enviar: [motivo de cartera]" | `cliente_puede_operar()` — congelada, en revisión o bloqueada administrativamente |
 | "La cotización ya expiró: no se puede aprobar" | `vigencia_hasta` pasada — se valida por fecha, no por estado |
 | "Unidad de captura incompatible con el producto" | La unidad de la línea no es la base ni la de contenido del producto |
-| "No hay una reserva comprometida para la línea de esta NR..." | Se intentó despachar sin haber liberado el pedido primero |
-| "La reserva comprometida no alcanza para despachar esa cantidad de la línea..." | Se intentó despachar más de lo reservado para esa línea de pedido |
-| "Se bloquea la PO completa hasta corregir el documento del cliente" | Costo unitario distinto en al menos una partida, sin subtotal coincidente |
-| "Requiere autorización de Dirección (excepcion_subtotal)" | Subtotal coincide pero los unitarios varían, sin `autorizacion_id` vigente |
-| "El RFC declarado no coincide con el de la entidad" | Rechazo automático de la PO completa |
-| "No puedes resolver tu propia solicitud" | Anti-autoaprobación (`ventas_autorizaciones`/`cliente_excepciones`) |
-| "Este vínculo ya tiene consecuencias de facturación... no se puede cancelar aquí" | El vínculo está `aprobado_para_facturacion`/`facturado` — `ventas_vinculo_cancelar()` lo bloquea |
-| "Este vínculo ya está cancelado" | Doble cancelación — idempotencia de `ventas_vinculo_cancelar()` |
+| "No hay una reserva comprometida para la línea de esta NR..." / "...para esta partida..." | Se intentó despachar (NR o PO) sin haber liberado el pedido primero |
+| "La reserva comprometida no alcanza para despachar/surtir esa cantidad..." | Se intentó despachar más de lo reservado para esa línea de pedido/partida |
+| "Falta el número de PO del cliente para aprobar por esta vía" | `via='orden_compra'` sin `numero_po` en el body de `.../aprobar` (`043`) |
+| "Ya existe una PO con ese número para este cliente — revisa si es duplicada" | `uq_po_numero` — mismo `numero_po_normalizado` (mayúsculas/espacios ignorados) para la misma entidad, ya no cancelada |
+| "Este pedido se aprobó como orden de compra del cliente: se surte desde la PO, sin nota de remisión" | Se intentó `ventas_nr_emitir()` sobre un pedido `via='orden_compra'` (`044`) |
+| "Esta orden de compra ya no admite surtido (estado %)" / "...ya está cancelada" / "...ya tiene mercancía surtida: la salida es una devolución, no una cancelación" | Transición de PO fuera de su estado permitido — `ventas_po_despachar()`/`ventas_po_cancelar()` |
+| "No puedes resolver tu propia solicitud" | Anti-autoaprobación (`ventas_autorizaciones`/`cliente_excepciones`) — mecanismo intacto para la Vía A, aunque hoy nadie genera solicitudes nuevas de PO |
 | "Sólo se cancela una cotización aprobada" | Se intentó cancelar un `borrador` (elimínalo) o una `enviada` (recházala) |
 | "Sólo se elimina una cotización en borrador" | `ventas_cotizacion_eliminar()` — la cotización ya no está en `borrador` |
 | "Esta cotización ya no admite editar sus líneas (estado %)" | El candado total de `ventas_cotizacion_linea_before_write()` — fuera de `borrador`/`enviada` |
@@ -267,23 +336,32 @@ chocar.
 
 ## Pendiente (fuera de esta entrega)
 
-- **Permisos de PO entre vendedores, sin resolver a propósito.** No hay
-  regla inequívoca en código ni en proceso: `030:165-168` sugiere que la
-  visibilidad amplia es intencional ("una PO consolidada puede involucrar
-  NR de otro vendedor del mismo cliente"), pero el texto de "Quién puede"
-  de arriba decía "igual que cotizar" sin aclarar que es sólo por rol.
-  Pendiente de confirmar con el dueño del proyecto: ¿una PO consolidada de
-  un cliente puede cubrir NR de varios vendedores? Si la respuesta es no,
-  la opción implementable sin columna nueva es restringir
-  `ventas_po_validar()` por `vendedor_id` de las NR vinculadas (ver
+- **Vía B cerrada 2026-08-08 (043/044)** — ya no está pendiente: la PO
+  nace al aprobar y se despacha con `ventas_po_despachar()`, ver §3/§5/§6.
+- **Vía A (PO que llega DESPUÉS de una NR) — pendiente, para otra
+  sesión.** Al retirar la validación por partida (§6), no hay ningún
+  camino para registrar una PO que el cliente manda después de que ya se
+  remisionó por Vía A. `ventas_po_nr_vinculos`, el enum `vinculo_estado`
+  y sus 2 *constraint triggers* diferidos se conservan en el esquema,
+  inertes (sin GRANT de escritura), listos para cuando se reconstruya —
+  ver el bloque `<details>` de §6.
+- **Permisos de PO entre vendedores — la pregunta original ya no aplica a
+  la Vía B, pero resurge tal cual con la Vía A.** `030:165-168` discutía
+  si una PO consolidada podía involucrar NR de otro vendedor del mismo
+  cliente — irrelevante en Vía B (la PO nace del pedido del propio
+  vendedor que aprobó). Si la reconstrucción de la Vía A reintroduce algo
+  como `ventas_po_validar()`, repreguntar entonces si `vendedor_id` debe
+  filtrar qué NR puede cubrir cada usuario `ventas` (ver
   `contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y TODO de `CLAUDE.md`).
-- El resto de los pendientes de RTB-VEN-01 (Vía B sin NR, reloj de
-  cobranza/CFDI) siguen en el TODO de `CLAUDE.md` — el emparejamiento
-  apartado↔línea (antes hallazgo crítico #1) ya se corrigió en `035`, ver
-  §5 arriba.
-- **Vía B (PO directa, sin NR)**: el pedido se aprueba/libera igual, pero
-  no tiene una función de despacho dedicada en esta entrega — ver TODO en
-  `CLAUDE.md`.
+- **`ventas_po_cancelar()` sin botón en la UI** — existe (`044`) pero la
+  cancelación de negocio real sigue siendo "Cancelar cotización" (§3b),
+  que también cancela la PO en su rama sin entrega.
+- **Cierre de una PO tras resolver su devolución** — no construido; una PO
+  con entrega parcial/total que terminó en devolución (§3b) se queda
+  `parcialmente_surtida`/`surtida` para siempre.
+- El resto de los pendientes de RTB-VEN-01 (reloj de cobranza/CFDI) sigue
+  en el TODO de `CLAUDE.md` — el emparejamiento apartado↔línea (antes
+  hallazgo crítico #1) ya se corrigió en `035`, ver §5 arriba.
 - El reloj de cobranza, CFDI y pagos son RTB-PRO-FAC-01 (Facturación),
   módulo futuro. `nr_estado` ya incluye `facturada`/`pagada_cerrada`, pero
   ninguna función de este módulo los escribe.

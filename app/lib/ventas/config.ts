@@ -14,7 +14,10 @@ import {
   type DevolucionEstado,
   type NrEstado,
   type PedidoEstado,
+  type PedidoVia,
   type PoEstado,
+  type PoFechaCampo,
+  type PoOrden,
   type PrecioOrigenVenta,
   type VentasAutorizacionEstado,
   type VentasAutorizacionTipo,
@@ -137,6 +140,11 @@ export const PEDIDO_ESTADO_TONO: Record<PedidoEstado, Tono> = {
   en_devolucion: 'bloqueado',
 };
 
+export const PEDIDO_VIA_LABELS: Record<PedidoVia, string> = {
+  nota_remision: 'Nota de Remisión',
+  orden_compra: 'Orden de Compra del cliente',
+};
+
 // "Estado de máxima vigilancia" (RTB-PRO-VEN-01 §III): entregada_sin_po es
 // el foco del tablero de seguimiento — hay valor entregado sin factura.
 export const NR_ESTADO_LABELS: Record<NrEstado, string> = {
@@ -165,27 +173,44 @@ export const NR_ESTADO_TONO: Record<NrEstado, Tono> = {
   con_incidencia: 'bloqueado',
 };
 
+// Ciclo de surtido de la Vía B (043) — ver types/ventas.ts PO_ESTADOS.
 export const PO_ESTADO_LABELS: Record<PoEstado, string> = {
-  recibida: 'Recibida',
-  en_validacion: 'En validación',
-  parcialmente_vinculada: 'Parcialmente vinculada',
-  vinculada: 'Vinculada',
-  pendiente_de_confirmacion: 'Pendiente de confirmación',
-  rechazada: 'Rechazada',
-  corregida: 'Corregida',
+  abierta: 'Abierta',
+  parcialmente_surtida: 'Parcialmente surtida',
+  surtida: 'Surtida',
+  facturada: 'Facturada',
+  pagada_cerrada: 'Pagada / cerrada',
   cancelada: 'Cancelada',
 };
 
 export const PO_ESTADO_TONO: Record<PoEstado, Tono> = {
-  recibida: 'pendiente',
-  en_validacion: 'pendiente',
-  parcialmente_vinculada: 'pendiente',
-  vinculada: 'activo',
-  pendiente_de_confirmacion: 'bloqueado',
-  rechazada: 'bloqueado',
-  corregida: 'pendiente',
+  abierta: 'pendiente',
+  parcialmente_surtida: 'pendiente',
+  surtida: 'activo',
+  facturada: 'activo',
+  pagada_cerrada: 'inactivo',
   cancelada: 'inactivo',
 };
+
+/** Selector de campo del filtro de rango de fechas del listado de PO —
+ *  mismo patrón que COTIZACION_FECHA_CAMPO_LABELS. */
+export const PO_FECHA_CAMPO_LABELS: Record<PoFechaCampo, string> = {
+  creacion: 'Fecha de creación',
+  fecha_po: 'Fecha de la PO',
+  surtido: 'Fecha de surtido',
+};
+
+export const PO_ORDEN_LABELS: Record<PoOrden, string> = {
+  reciente: 'Más recientes primero',
+  antigua: 'Más antiguas primero',
+  monto_desc: 'Mayor monto primero',
+  monto_asc: 'Menor monto primero',
+  fecha_po: 'Fecha de PO más próxima',
+};
+
+/** Tarjetas por columna del tablero de PO antes de mostrar "+N más — ver en
+ *  la tabla" — mismo criterio que COTIZACION_TABLERO_TOPE. */
+export const PO_TABLERO_TOPE = 40;
 
 export const VINCULO_ESTADO_LABELS: Record<VinculoEstado, string> = {
   pendiente: 'Pendiente',

@@ -7,12 +7,17 @@ import { evidenciaUploadSchema } from '@/lib/ventas/schemas';
 import { EVIDENCIA_VENTAS_BUCKET } from '@/lib/ventas/config';
 
 // POST - URL firmada de subida para el bucket privado 'evidencias-ventas'
-// (029) — evidencia de aprobación del cliente, congelamiento y excepción.
-// Mismo patrón que comprobante-upload-url (RTB-ENT-01) y
-// soporte-upload-url (RTB-INV-01).
+// (029) — evidencia de aprobación del cliente, congelamiento, excepción y
+// (043) documento de PO del cliente en Vía B. Mismo patrón que
+// comprobante-upload-url (RTB-ENT-01) y soporte-upload-url (RTB-INV-01).
 export async function POST(request: Request) {
   try {
-    const { response } = await requireApiRole(['super_admin', 'direccion', 'ventas', 'facturacion', 'finanzas']);
+    // gerente_comercial faltaba aquí (mismo bug preexistente que
+    // aprobar/route.ts, 037): ya autoriza cotizaciones/PO, esta ruta se
+    // había quedado atrás.
+    const { response } = await requireApiRole([
+      'super_admin', 'direccion', 'gerente_comercial', 'ventas', 'facturacion', 'finanzas',
+    ]);
     if (response) return response;
 
     const parsed = evidenciaUploadSchema.safeParse(await request.json().catch(() => null));

@@ -57,6 +57,14 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
 
   const correoSugerido = contacto?.correo ?? cotizacion.entidades?.correo_principal ?? null;
 
+  // requiere_po prellena la vía sugerida en el diálogo de aprobación (043)
+  // — el usuario sigue pudiendo elegir la otra vía, es sólo un default.
+  const { data: cliente } = await supabase
+    .from('clientes')
+    .select('requiere_po')
+    .eq('entidad_id', cotizacion.entidad_id)
+    .maybeSingle();
+
   // Sólo se consulta si aplica: en cualquier otro estado no puede existir
   // una devolución ligada (nace únicamente por ventas_cotizacion_cancelar()
   // al pasar a 'en_devolucion').
@@ -81,6 +89,7 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
       contactoNombre={contacto?.nombre ?? null}
       envios={(envios ?? []) as any}
       nombresUsuarios={nombresUsuarios}
+      requierePo={cliente?.requiere_po ?? false}
     />
   );
 }

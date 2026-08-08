@@ -2,9 +2,20 @@
 
 **Proyecto:** Refacciones Tomás Badillo, S.A. de C.V.
 **Submódulo:** RTB-VEN-01 Ventas (cotización → PO vinculada)
-**Versión:** 1.0
+**Versión:** 1.1 (actualizado 2026-08-08 — ver nota abajo)
 **Fecha:** 2026-08-07
-**Estado:** Implementado — primera entrega (Vía A completa, Vía B pendiente)
+**Estado:** Implementado — Vía A y Vía B completas (Vía B cerrada
+2026-08-08, migraciones 043/044); Vía A **de PO tardía** (la que llega
+DESPUÉS de una NR) pendiente — ver §6/§10
+
+> **Actualización 2026-08-08:** el resto de este documento describe el
+> diseño original del 2026-08-07 ("Vía B pendiente", validación de PO por
+> partida contra NR). Ese diseño de Vía B se **reemplazó** — la PO ya no
+> se captura a mano y valida contra la NR; nace directamente al aprobar la
+> cotización, con sus partidas copiadas del pedido. El texto original se
+> conserva abajo sin editar como registro histórico; §6 y §10 tienen notas
+> explícitas de qué cambió y por qué. Ver `CLAUDE.md` → Historial
+> (2026-08-08, cierre de jornada) para el detalle completo.
 
 > Este documento **manda** sobre `contexto/RTB-PRO-VEN-01_Modulo_Ventas.md`
 > para todo lo que ya está implementado. Ese documento describe el proceso
@@ -163,25 +174,35 @@ verificación y bugs cerrados en el proceso: `db/procesos/ciclo-de-venta.md`
   de línea es editable — antes `cantidad`/`descuento_porcentaje`/`activo`
   sí lo eran, sin que nada lo impidiera.
 
-## 6. PO↔NR — tabla de asignación por partida, no relación simple
+## 6. La PO nace al aprobar (Vía B) — la validación por partida era para la Vía A
 
-El documento original describe "N NR → 1 PO" como si fuera una relación de
-agrupación simple (varias NR bajo una sola PO). La implementación es más
-fina: **`ventas_po_nr_vinculos` es una tabla N:M por partida** — cada
-renglón de la PO (`ventas_po_partidas`) se puede cubrir con partes de
-varias NR, y cada NR se puede repartir entre varias partidas de PO. La
-cobertura se calcula siempre por agregación con filtro de estado, nunca
-por un contador, respaldada por dos *constraint triggers* diferidos que
-impiden que la suma cubierta exceda ni lo entregado por la NR ni lo
-declarado por la partida.
+**Corregido/rediseñado 2026-08-08 (043/044).** El documento original
+describía "N NR → 1 PO" con una tabla de asignación N:M por partida
+(`ventas_po_nr_vinculos`) y una función `ventas_po_validar()` que cruzaba,
+siempre en SQL sobre `numeric`, moneda → RFC → costo unitario por partida
+→ código de producto divergente → duplicidad. Esa maquinaria existía para
+un escenario concreto: una PO capturada a mano que hay que **auditar**
+contra lo que ya se entregó por NR, porque la recaptura puede divergir.
 
-`ventas_po_validar()` cruza, siempre en SQL sobre `numeric` (nunca
-comparando floats en TypeScript): moneda → RFC → costo unitario por
-partida (**una sola partida divergente bloquea la PO completa**, sin
-excepción salvo subtotal coincidente con autorización de Dirección) →
-código de producto divergente (criterio del vendedor si costo/subtotal ya
-cuadraron) → duplicidad (cobertura que excedería lo ya entregado —
-incidencia, nunca asumida automáticamente).
+El dueño del proyecto pidió invertir el flujo — al aprobar una cotización
+se elige la vía (NR o PO del cliente), y si es PO, ésta **nace ahí
+mismo**, con sus partidas copiadas 1:1 de las líneas del pedido recién
+creado. Al nacer de datos consistentes por construcción, ya no hay nada
+que auditar: la validación por partida deja de tener sentido, y con ella
+los estados `recibida`/`vinculada` de `po_estado`, que ahora sigue el
+ciclo de surtido `abierta → parcialmente_surtida → surtida → facturada →
+pagada_cerrada` (+ `cancelada`) — la PO pasa a gobernar la entrega del
+pedido, igual que hace la NR en la Vía A. `ventas_po_despachar()` (espejo
+de `ventas_nr_despachar()`) surte directo al kardex sin pasar por
+ninguna NR.
+
+`ventas_po_validar()`/`ventas_vinculo_cancelar()` se retiraron. La tabla
+`ventas_po_nr_vinculos`, el enum `vinculo_estado`, sus 2 *constraint
+triggers* diferidos, y la bandeja de Autorizaciones/
+`ventas_autorizacion_resolver()` se **conservaron intactos, inertes** —
+son exactamente lo que hace falta para la **Vía A** (una PO que llega
+DESPUÉS de una NR, sin que la cotización se haya aprobado como PO),
+deliberadamente fuera de esta entrega. Ver §10 y `CLAUDE.md` TODO.
 
 ## 7. Congelamiento de cartera — a nivel Entidad, tablas nuevas
 
@@ -217,15 +238,22 @@ nunca el propio solicitante.
 
 Ver también CLAUDE.md → TODO.
 
-- **Vía B (PO directa, sin NR)** — sin función de despacho dedicada;
-  pendiente decidir con el dueño del proyecto si se construye o se
-  descarta si en la práctica toda venta real pasa por NR.
+- **Vía B (PO directa, sin NR) — cerrada 2026-08-08 (043/044).** La PO
+  nace dentro de `ventas_cotizacion_aprobar()` y se despacha con
+  `ventas_po_despachar()`, sin NR. Verificado por SQL con rol real y clic
+  a clic (`qa.ventas`/`qa.almacen`), incluido el kardex real confirmado
+  por SQL directo. Ver §6.
+- **Vía A (PO que llega DESPUÉS de una NR)** — deliberadamente fuera de la
+  entrega de 043/044, para otra sesión. La maquinaria de vínculos PO↔NR
+  por partida y la bandeja de Autorizaciones se conservaron inertes, no se
+  reconstruyeron desde cero.
 - **Reloj de cobranza/CFDI/pago** — RTB-PRO-FAC-01, módulo futuro.
 - **Clasificación de discrepancias del puente conteo→ajuste** (hallazgo de
   RTB-INV-01, no de este módulo, documentado aparte en CLAUDE.md TODO).
-- **Clic a clic con sesiones reales de rol** — esta entrega se verificó por
-  SQL simulando rol + `docker build --target builder`, no con un recorrido
-  manual en la app con los 8 usuarios QA ya existentes.
+- **Clic a clic con sesiones reales de rol** — cerrado para el ciclo de
+  cotización→pedido→NR→despacho (2026-08-07) y para la Vía B PO
+  (2026-08-08, `qa.ventas`/`qa.almacen`). Pendiente sólo para lo que
+  vuelva a construirse en la Vía A.
 
 ---
 

@@ -24,6 +24,7 @@ import {
 } from '@/types/ventas';
 import { CANAL_ORIGENES, type CanalOrigen } from '@/types/entidades';
 import { COTIZACION_TABLERO_TOPE } from '@/lib/ventas/config';
+import { valorLike, diaSiguiente } from '@/lib/ventas/listado-comun';
 
 export const COTIZACIONES_VISTA = 'ventas_cotizaciones_listado';
 export const COTIZACIONES_PAGE_SIZE = 20;
@@ -132,23 +133,6 @@ export function parsearFiltrosCotizacion(fuente: FuenteParams, actorId: string |
     orden,
     page,
   };
-}
-
-/** Envuelve el valor de un ilike para .or(): las comillas dobles delimitan
- *  el valor y así comas/paréntesis dejan de leerse como separadores
- *  estructurales de or=(...) — sin esto, "Refacciones, S.A." (una razón
- *  social con coma, el caso común) rompe el parser de PostgREST
- *  (PGRST100). El patrón de api/entidades/route.ts sólo neutraliza %/_ y
- *  no cubre este caso. */
-function valorLike(q: string): string {
-  const sinComodines = q.replace(/[%_]/g, '');
-  const escapado = sinComodines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `"%${escapado}%"`;
-}
-
-function diaSiguiente(fechaYYYYMMDD: string): string {
-  const [y, m, d] = fechaYYYYMMDD.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
 /** Encadena los filtros sobre un query builder de

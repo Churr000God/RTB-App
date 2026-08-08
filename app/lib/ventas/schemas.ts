@@ -59,13 +59,30 @@ export const devolucionResolverSchema = z.object({
   notas: z.string().trim().min(3, 'Describe cómo se resolvió la devolución').max(2000),
 });
 
-export const cotizacionAprobarSchema = z.object({
-  canal: z.enum(CANAL_ORIGENES, { errorMap: () => ({ message: 'Falta el canal de la evidencia de aprobación' }) }),
-  evidencia_path: z.string().trim().max(500).optional().nullable(),
-  referencia: z.string().trim().max(500).optional().nullable(),
-  contacto_id: uuidSchema.optional().nullable(),
-  datos_faltantes: z.array(z.enum(DATOS_FALTANTES)).optional().default([]),
-});
+// 'via' bifurca el resto del ciclo dentro de ventas_cotizacion_aprobar()
+// (043): 'nota_remision' (default, comportamiento de siempre) u
+// 'orden_compra' (Vía B — la PO nace en la misma transacción). Los campos
+// de PO sólo son obligatorios/relevantes cuando via==='orden_compra'; el
+// superRefine replica exactamente lo que la función SQL exige (numero_po no
+// vacío) para dar el mismo mensaje sin esperar el round-trip.
+export const cotizacionAprobarSchema = z
+  .object({
+    canal: z.enum(CANAL_ORIGENES, { errorMap: () => ({ message: 'Falta el canal de la evidencia de aprobación' }) }),
+    evidencia_path: z.string().trim().max(500).optional().nullable(),
+    referencia: z.string().trim().max(500).optional().nullable(),
+    contacto_id: uuidSchema.optional().nullable(),
+    datos_faltantes: z.array(z.enum(DATOS_FALTANTES)).optional().default([]),
+    via: z.enum(['nota_remision', 'orden_compra']).optional().default('nota_remision'),
+    numero_po: z.string().trim().max(80).optional().nullable(),
+    fecha_po: z.string().trim().optional().nullable(),
+    canal_entrega: z.enum(CANAL_ORIGENES).optional().nullable(),
+    subtotal_declarado: z.coerce.number().nonnegative().optional().nullable(),
+    total_declarado: z.coerce.number().nonnegative().optional().nullable(),
+  })
+  .refine((v) => v.via !== 'orden_compra' || (v.numero_po && v.numero_po.trim().length > 0), {
+    message: 'El número de PO del cliente es obligatorio para aprobar por esta vía',
+    path: ['numero_po'],
+  });
 
 // El corazón del snapshot: NO acepta precio_unitario/costo_base_snapshot/
 // margen_snapshot — espejo exacto del GRANT INSERT de ventas_cotizacion_lineas.
@@ -140,48 +157,28 @@ export const nrSeguimientoCreateSchema = z.object({
   nota: z.string().trim().min(3, 'La nota de seguimiento es obligatoria').max(2000),
 });
 
-// ---------- PO del cliente ----------
+// ---------- PO del cliente (Vía B, 043/044) ----------
+// La PO ya no se da de alta a mano (poCreateSchema/poPartidaCreateSchema) ni
+// se valida por partida contra una NR (poValidarSchema/vinculoCancelarSchema)
+// — nace dentro de ventas_cotizacion_aprobar() (ver cotizacionAprobarSchema
+// arriba) y transiciona sólo por ventas_po_despachar()/
+// ventas_po_adjuntar_evidencia()/ventas_po_cancelar().
 
-export const poCreateSchema = z.object({
-  numero_po: z.string().trim().min(1, 'El número de PO es obligatorio').max(80),
-  entidad_id: uuidSchema,
-  pedido_id: uuidSchema.optional().nullable(),
-  moneda: monedaSchema,
-  subtotal_declarado: z.coerce.number().nonnegative().optional().nullable(),
-  total_declarado: z.coerce.number().nonnegative().optional().nullable(),
-  fecha_po: z.string().trim().optional().nullable(),
-  canal_entrega: z.enum(CANAL_ORIGENES).optional().nullable(),
-  evidencia_path: z.string().trim().max(500).optional().nullable(),
-  razon_social_declarada: z.string().trim().max(255).optional().nullable(),
-  rfc_declarado: z.string().trim().toUpperCase().max(13).optional().nullable(),
-});
-
-export const poPartidaCreateSchema = z.object({
-  linea_numero: z.coerce.number().int().positive(),
-  codigo_cliente: z.string().trim().max(80).optional().nullable(),
-  descripcion: z.string().trim().max(2000).optional().nullable(),
-  cantidad: z.coerce.number().positive('La cantidad debe ser mayor a cero'),
-  precio_unitario: z.coerce.number().nonnegative('El precio debe ser mayor o igual a cero'),
-  producto_id: uuidSchema.optional().nullable(),
-});
-
-export const poValidarSchema = z.object({
-  vinculos: z
+export const poDespacharSchema = z.object({
+  lineas: z
     .array(
       z.object({
         po_partida_id: uuidSchema,
-        nr_linea_id: uuidSchema,
-        cantidad_cubierta: z.coerce.number().positive('La cantidad cubierta debe ser mayor a cero'),
+        cantidad: z.coerce.number().positive('La cantidad a surtir debe ser mayor a cero'),
       })
     )
-    .min(1, 'Indica al menos un vínculo PO↔NR'),
-  autorizacion_id: uuidSchema.optional().nullable(),
-  aceptar_codigo_divergente: z.boolean().optional().default(false),
+    .min(1, 'Indica al menos una partida a surtir'),
 });
 
-// Cancelar un vínculo PO↔NR capturado por error (ventas_vinculo_cancelar(), 036).
-export const vinculoCancelarSchema = z.object({
-  motivo: motivoSchema,
+export const poCancelarSchema = z.object({ motivo: motivoSchema });
+
+export const poEvidenciaSchema = z.object({
+  evidencia_path: z.string().trim().min(1, 'Falta la ruta del archivo').max(500),
 });
 
 // ---------- Autorizaciones (excepciones/correcciones de Ventas) ----------

@@ -28,16 +28,19 @@ import { CotizacionEstadoBadge } from '@/components/ventas/estado-badge';
 import { MotivoDialog } from '@/components/inventario/motivo-dialog';
 import { Actualizando } from '@/components/ui/actualizando';
 import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
+import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { puede } from '@/lib/ventas/permisos';
-import { DATOS_FALTANTES_LABELS, PRECIO_ORIGEN_LABELS } from '@/lib/ventas/config';
+import { DATOS_FALTANTES_LABELS, PEDIDO_VIA_LABELS, PRECIO_ORIGEN_LABELS } from '@/lib/ventas/config';
 import { formatearMoneda, formatearPorcentaje } from '@/lib/ventas/validaciones';
 import { CANAL_ORIGENES } from '@/types/entidades';
 import { CANAL_ORIGEN_LABELS } from '@/lib/entidades/config';
 import {
   DATOS_FALTANTES,
+  PEDIDO_VIAS,
   type CotizacionEnvioRow,
   type CotizacionLineaRow,
   type DevolucionRow,
+  type PedidoVia,
   type PrecioOrigenVenta,
 } from '@/types/ventas';
 import {
@@ -67,6 +70,9 @@ interface Props {
   /** id → full_name, resuelto por usuarios_directorio() en el servidor
    *  (profiles_select no deja ver la fila de otro usuario por embed). */
   nombresUsuarios?: Record<string, string>;
+  /** clientes.requiere_po del cliente de esta cotización — prellena (no
+   *  obliga) la vía sugerida en el diálogo de aprobación (043). */
+  requierePo?: boolean;
 }
 
 // El servidor manda: cotizacion/lineas llegan como props del Server
@@ -84,6 +90,7 @@ export function CotizacionDetalle({
   contactoNombre,
   envios = [],
   nombresUsuarios = {},
+  requierePo = false,
 }: Props) {
   const router = useRouter();
   const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
@@ -194,7 +201,9 @@ export function CotizacionDetalle({
               Enviar al cliente
             </Button>
           )}
-          {cotizacion.estado === 'enviada' && puedeAdministrar && <AprobarDialog cotizacionId={cotizacion.id} accion={accion} />}
+          {cotizacion.estado === 'enviada' && puedeAdministrar && (
+            <AprobarDialog cotizacionId={cotizacion.id} ejecutar={ejecutar} ocupado={ocupado} requierePo={requierePo} />
+          )}
           {cotizacion.estado === 'enviada' && puedeAdministrar && (
             <MotivoDialog
               trigger={
@@ -786,26 +795,97 @@ function ConsultarComprasDialogContent({
   );
 }
 
-function AprobarDialog({ cotizacionId, accion }: { cotizacionId: string; accion: (url: string, body?: unknown) => Promise<boolean> }) {
+// 'via' bifurca el resto del ciclo dentro de ventas_cotizacion_aprobar()
+// (043): 'nota_remision' (comportamiento de siempre) u 'orden_compra' —
+// la PO nace en la misma transacción, con sus partidas copiadas 1:1 de las
+// líneas del pedido. Prellenado (no forzado) a 'orden_compra' cuando
+// clientes.requiere_po es true. El checkbox 'po_pendiente' de
+// datos_faltantes se deshabilita en esa vía: ya no aplica, la PO se está
+// registrando en este mismo paso.
+function AprobarDialog({
+  cotizacionId,
+  ejecutar,
+  ocupado,
+  requierePo,
+}: {
+  cotizacionId: string;
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
+  requierePo: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [canal, setCanal] = useState('whatsapp');
   const [referencia, setReferencia] = useState('');
   const [faltantes, setFaltantes] = useState<string[]>([]);
-  const [enviando, setEnviando] = useState(false);
+  const [via, setVia] = useState<PedidoVia>(requierePo ? 'orden_compra' : 'nota_remision');
+  const [numeroPo, setNumeroPo] = useState('');
+  const [fechaPo, setFechaPo] = useState('');
+  const [canalEntrega, setCanalEntrega] = useState('');
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [subiendo, setSubiendo] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const toggleFaltante = (f: string) => {
     setFaltantes((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]));
   };
 
   const confirmar = async () => {
-    setEnviando(true);
-    const ok = await accion(`/api/ventas/cotizaciones/${cotizacionId}/aprobar`, {
-      canal,
-      referencia: referencia || undefined,
-      datos_faltantes: faltantes,
+    if (via === 'orden_compra' && !numeroPo.trim()) {
+      setError('Captura el número de PO del cliente.');
+      return;
+    }
+    setError(null);
+
+    // Mismo flujo de 3 pasos que el resto del módulo (inventario/ajustes/
+    // [id]/page.tsx): subir el archivo al bucket ANTES de aprobar, para no
+    // dejar la cotización aprobada con un adjunto a medias.
+    let evidenciaPath: string | undefined;
+    if (archivo) {
+      setSubiendo(true);
+      const resUrl = await fetch('/api/ventas/evidencias/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombreArchivo: archivo.name }),
+      });
+      const dataUrl = await resUrl.json().catch(() => ({}));
+      if (!resUrl.ok) {
+        setSubiendo(false);
+        setError(dataUrl?.error ?? 'No se pudo subir el archivo.');
+        return;
+      }
+      const supabase = createSupabaseBrowserClient();
+      const { error: uploadError } = await supabase.storage
+        .from('evidencias-ventas')
+        .uploadToSignedUrl(dataUrl.path, dataUrl.token, archivo);
+      setSubiendo(false);
+      if (uploadError) {
+        setError('No se pudo subir el archivo: ' + uploadError.message);
+        return;
+      }
+      evidenciaPath = dataUrl.path;
+    }
+
+    const res = await ejecutar(`/api/ventas/cotizaciones/${cotizacionId}/aprobar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        canal,
+        referencia: referencia || undefined,
+        datos_faltantes: via === 'orden_compra' ? faltantes.filter((f) => f !== 'po_pendiente') : faltantes,
+        evidencia_path: evidenciaPath,
+        via,
+        numero_po: via === 'orden_compra' ? numeroPo.trim() : undefined,
+        fecha_po: via === 'orden_compra' ? fechaPo || undefined : undefined,
+        canal_entrega: via === 'orden_compra' ? canalEntrega || undefined : undefined,
+      }),
     });
-    setEnviando(false);
-    if (ok) setOpen(false);
+    if (!res.ok) return;
+    setOpen(false);
+    if (res.data?.via === 'orden_compra' && res.data?.po_folio) {
+      toast.success(`Cotización aprobada — se creó la PO ${res.data.po_folio}.`);
+    } else {
+      toast.success('Cotización aprobada.');
+    }
   };
 
   return (
@@ -818,6 +898,25 @@ function AprobarDialog({ cotizacionId, accion }: { cotizacionId: string; accion:
           <DialogTitle>Evidencia de aprobación del cliente</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
+          <div>
+            <Label className="text-xs">¿Cómo se aprueba?</Label>
+            <ToggleGroup
+              type="single"
+              value={via}
+              onValueChange={(v) => v && setVia(v as PedidoVia)}
+              className="mt-1 justify-start"
+            >
+              {PEDIDO_VIAS.map((v) => (
+                <ToggleGroupItem key={v} value={v} className="text-xs">
+                  {PEDIDO_VIA_LABELS[v]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            {requierePo && via === 'nota_remision' && (
+              <p className="mt-1 text-[11px] text-amber-700">Este cliente normalmente exige PO — confirma que de verdad va sin ella.</p>
+            )}
+          </div>
+
           <div>
             <Label className="text-xs">Canal por el que aprobó</Label>
             <select value={canal} onChange={(e) => setCanal(e.target.value)} className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2">
@@ -837,21 +936,82 @@ function AprobarDialog({ cotizacionId, accion }: { cotizacionId: string; accion:
               className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
             />
           </div>
+
+          {via === 'orden_compra' && (
+            <div className="p-3 bg-rtb-surface/60 rounded-lg space-y-3">
+              <p className="text-xs font-semibold text-rtb-navy">Datos de la orden de compra</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs">Número de PO *</Label>
+                  <input
+                    value={numeroPo}
+                    onChange={(e) => setNumeroPo(e.target.value)}
+                    className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Fecha de la PO (opcional)</Label>
+                  <input
+                    type="date"
+                    value={fechaPo}
+                    onChange={(e) => setFechaPo(e.target.value)}
+                    className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Canal de entrega de la PO (opcional)</Label>
+                <select
+                  value={canalEntrega}
+                  onChange={(e) => setCanalEntrega(e.target.value)}
+                  className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
+                >
+                  <option value="">Igual que el canal de aprobación</option>
+                  {CANAL_ORIGENES.map((c) => (
+                    <option key={c} value={c}>
+                      {CANAL_ORIGEN_LABELS[c]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs">Archivo de la PO (opcional — también se puede subir después)</Label>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
+                  className="mt-1 text-xs"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Las partidas se copiarán tal cual de esta cotización — no se vuelven a capturar.</p>
+            </div>
+          )}
+
           <div>
             <Label className="text-xs">Datos formales que faltan (opcional)</Label>
             <div className="mt-1 space-y-1.5">
               {DATOS_FALTANTES.map((f) => (
-                <label key={f} className="flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={faltantes.includes(f)} onChange={() => toggleFaltante(f)} />
+                <label
+                  key={f}
+                  className={`flex items-center gap-2 text-xs ${f === 'po_pendiente' && via === 'orden_compra' ? 'opacity-40' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={faltantes.includes(f)}
+                    disabled={f === 'po_pendiente' && via === 'orden_compra'}
+                    onChange={() => toggleFaltante(f)}
+                  />
                   {DATOS_FALTANTES_LABELS[f]}
                 </label>
               ))}
             </div>
           </div>
+
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
-          <Button size="sm" onClick={confirmar} disabled={enviando} className="bg-rtb-gold hover:bg-rtb-gold/90 text-white">
-            {enviando && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+          <Button size="sm" onClick={confirmar} disabled={ocupado || subiendo} className="bg-rtb-gold hover:bg-rtb-gold/90 text-white">
+            {(ocupado || subiendo) && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
             Aprobar
           </Button>
         </DialogFooter>

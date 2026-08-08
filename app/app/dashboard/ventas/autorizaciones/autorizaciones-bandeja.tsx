@@ -125,6 +125,19 @@ export function AutorizacionesBandeja({
       <Actualizando activo={refrescando} />
       {error && <p className="text-sm text-destructive">{error}</p>}
 
+      {/* 043: el único productor de autorizaciones tipo excepcion_subtotal/
+          duplicidad_confirmada era la pantalla de validación de PO,
+          retirada al pasar la Vía B a nacer directo de la cotización. La
+          bandeja y ventas_autorizacion_resolver() siguen intactas — vuelven
+          a recibir solicitudes cuando se construya la Vía A (PO que llega
+          DESPUÉS de una NR). Aviso siempre visible, no sólo en vacío: las
+          filas que se ven ahora son historial, no indican que el flujo
+          siga generando nuevas. */}
+      <div className="p-3 bg-rtb-surface/60 rounded-lg text-sm text-muted-foreground">
+        Las excepciones de PO (subtotal coincidente, duplicidad) dejaron de generarse aquí — vuelven cuando se
+        reconstruya la Vía A del ciclo de Órdenes de Compra. Lo que se ve abajo es historial.
+      </div>
+
       <select
         value={estadoFiltro}
         onChange={(e) => cambiarFiltro(e.target.value as typeof estadoFiltro)}

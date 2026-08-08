@@ -1,143 +1,40 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { ProductoCombobox } from '@/components/inventario/producto-combobox';
-import { MotivoDialog } from '@/components/inventario/motivo-dialog';
-import { POEstadoBadge, VinculoEstadoBadge } from '@/components/ventas/estado-badge';
+import { POEstadoBadge } from '@/components/ventas/estado-badge';
+import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
 import { Actualizando } from '@/components/ui/actualizando';
 import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
+import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
-import { rfcCoincide } from '@/lib/ventas/validaciones';
-import { ArrowLeft, AlertCircle, CheckCircle2, Loader2, Plus, Trash2, Ban } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, FileText, Loader2, Upload, X } from 'lucide-react';
 
-// Estados de vinculo_estado que ya tienen consecuencia de facturación —
-// ventas_vinculo_cancelar() (036) los rechaza con 42501; no se ofrece el
-// botón para no invitar a un intento que sabemos que fallará.
-const VINCULO_NO_CANCELABLE = ['aprobado_para_facturacion', 'facturado', 'cancelado'];
+const DOCUMENTO_PO_MIMES = ['application/pdf', 'image/jpeg', 'image/png'];
+const DOCUMENTO_PO_EXTENSIONES = '.pdf,.jpg,.jpeg,.png';
+
+function formatearTamano(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface Props {
   po: any;
   partidas: any[];
-  vinculos: any[];
-  nrLineas: any[];
 }
 
-interface VinculoPropuesto {
-  po_partida_id: string;
-  nr_linea_id: string;
-  cantidad_cubierta: number;
-}
-
-// po/partidas/vinculos llegan como props del Server Component. propuestos
-// (vínculos aún no enviados) y resultado (veredicto de la última
-// validación) NO vienen del servidor — sobreviven al router.refresh() sin
-// necesidad de espejo, porque refresh() no desmonta componentes cliente.
-export function PoDetalle({ po, partidas, vinculos, nrLineas }: Props) {
-  const router = useRouter();
-  const [refrescando, iniciarRefresco] = useTransition();
-  const [propuestos, setPropuestos] = useState<VinculoPropuesto[]>([]);
-  const [resultado, setResultado] = useState<any>(null);
-  const [aceptarCodigo, setAceptarCodigo] = useState(false);
-  const [autorizacionId, setAutorizacionId] = useState('');
-  const [autorizadas, setAutorizadas] = useState<any[]>([]);
-  const [pendientes, setPendientes] = useState<any[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const rfcSospechoso = !rfcCoincide(po.rfc_declarado, po.entidades?.rfc);
-
-  // Autorizaciones de subtotal ya vigentes para ESTA PO — así el usuario
-  // elige de una lista en vez de copiar/pegar el UUID a mano (§3.4 de
-  // AUDITORIA_RTB-VEN-01.md). ventas_po_validar() (033:501-505) sólo acepta
-  // exactamente estas cuatro condiciones (tipo/estado/documento_tipo/
-  // documento_id); el filtro aquí las replica para no ofrecer nunca una
-  // opción que el SQL fuera a rechazar.
-  const cargarAutorizaciones = async () => {
-    const params = new URLSearchParams({
-      documento_tipo: 'purchase_order',
-      documento_id: po.id,
-      tipo: 'excepcion_subtotal',
-    });
-    const [resAut, resPend] = await Promise.all([
-      fetch(`/api/ventas/autorizaciones?${params.toString()}&estado=autorizada`, { cache: 'no-store' }),
-      fetch(`/api/ventas/autorizaciones?${params.toString()}&estado=pendiente`, { cache: 'no-store' }),
-    ]);
-    const [dataAut, dataPend] = await Promise.all([
-      resAut.json().catch(() => ({})),
-      resPend.json().catch(() => ({})),
-    ]);
-    const lista = resAut.ok ? (dataAut?.data ?? []) : [];
-    setAutorizadas(lista);
-    setPendientes(resPend.ok ? (dataPend?.data ?? []) : []);
-    // Con exactamente una vigente, se preselecciona sola — sigue siendo el
-    // usuario quien pulsa "Validar y vincular"; nada se aplica solo.
-    if (lista.length === 1) setAutorizacionId(lista[0].id);
-  };
-
-  useEffect(() => {
-    cargarAutorizaciones();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [po.id]);
-
-  const agregarVinculo = (v: VinculoPropuesto) => setPropuestos((prev) => [...prev, v]);
-  const quitarVinculo = (i: number) => setPropuestos((prev) => prev.filter((_, idx) => idx !== i));
-
-  // ventas_po_validar() responde 200 con {success:false, motivo, mensaje}
-  // como resultado de negocio válido (PO bloqueada/rechazada) — no es un
-  // error HTTP y no persiste nada, así que sólo refrescamos cuando
-  // success===true (a diferencia del resto del módulo, aquí res.ok !=
-  // "algo cambió"; por eso esta pantalla no usa useAccionServidor para
-  // validar()).
-  const validar = async () => {
-    if (propuestos.length === 0) {
-      setError('Agrega al menos un vínculo PO↔NR antes de validar.');
-      return;
-    }
-    setError(null);
-    setResultado(null);
-    setLoading(true);
-    const res = await fetch(`/api/ventas/ordenes-compra/${po.id}/validar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
-      body: JSON.stringify({
-        vinculos: propuestos,
-        autorizacion_id: autorizacionId || undefined,
-        aceptar_codigo_divergente: aceptarCodigo,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setLoading(false);
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo validar la PO.');
-      return;
-    }
-    setResultado(data);
-    if (data.success) {
-      setPropuestos([]);
-      iniciarRefresco(() => router.refresh());
-    }
-  };
-
-  const solicitarAutorizacion = async (tipo: string, motivo: string) => {
-    const res = await fetch('/api/ventas/autorizaciones', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
-      body: JSON.stringify({ tipo, documento_tipo: 'purchase_order', documento_id: po.id, motivo }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data?.error ?? 'No se pudo solicitar la autorización.');
-      return;
-    }
-    setResultado((r: any) => ({ ...r, autorizacionSolicitada: data?.data?.id }));
-    await cargarAutorizaciones();
-  };
+// po/partidas llegan como props del Server Component — sin espejo en
+// useState (el patrón ya establecido en §7.3): cada mutación pasa por
+// useAccionServidor(), que hace router.refresh(). Sin diálogo de despacho
+// aquí: vive en el detalle del pedido (Almacén entra por ahí, no tiene
+// acceso a esta pantalla — ver ACCESO_PANTALLA.ordenes_compra). Sin botón
+// de cancelar: la cancelación de negocio real pasa por
+// "Cancelar cotización" en el detalle de la cotización.
+export function PoDetalle({ po, partidas }: Props) {
+  const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -160,194 +57,245 @@ export function PoDetalle({ po, partidas, vinculos, nrLineas }: Props) {
         </div>
       </div>
 
-      {rfcSospechoso && (
-        <div className="flex items-center gap-2 p-3 bg-amber-50 text-amber-800 rounded-lg text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          El RFC declarado en la PO no coincide con el de la entidad — la validación lo rechazará.
-        </div>
-      )}
+      <div className="flex flex-wrap gap-3 text-sm">
+        {po.pedido && (
+          <Link
+            href={`/dashboard/ventas/pedidos/${po.pedido.id}`}
+            className="px-3 py-1.5 bg-rtb-surface/60 rounded-lg text-rtb-teal hover:underline"
+          >
+            Pedido {po.pedido.folio}
+          </Link>
+        )}
+        {po.cotizacion && (
+          <Link
+            href={`/dashboard/ventas/cotizaciones/${po.cotizacion.id}`}
+            className="px-3 py-1.5 bg-rtb-surface/60 rounded-lg text-rtb-teal hover:underline"
+          >
+            Cotización {po.cotizacion.folio}
+          </Link>
+        )}
+      </div>
 
-      {error && (
-        <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
+      <DocumentoCard
+        poId={po.id}
+        tieneDocumento={!!po.evidencia_path}
+        cancelada={po.estado === 'cancelada'}
+        ejecutar={ejecutar}
+        ocupado={ocupado}
+        error={error}
+        setError={setError}
+      />
 
-      {resultado && (
-        <div className={`p-4 rounded-lg text-sm ${resultado.success ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>
-          {resultado.success ? (
-            <>
-              <CheckCircle2 className="w-4 h-4 inline mr-1" /> PO vinculada. Estado: {resultado.estado_po}, vínculos creados:{' '}
-              {resultado.vinculos_creados}
-            </>
-          ) : (
-            <>
-              <p>{resultado.mensaje}</p>
-              {resultado.motivo === 'requiere_autorizacion_subtotal' && !resultado.autorizacionSolicitada && (
-                <Button
-                  size="sm"
-                  className="mt-2"
-                  onClick={() =>
-                    solicitarAutorizacion('excepcion_subtotal', 'Los unitarios varían pero el subtotal de la PO coincide.')
-                  }
-                >
-                  Solicitar autorización a Dirección
-                </Button>
-              )}
-              {resultado.autorizacionSolicitada && (
-                <p className="mt-2 text-xs">
-                  Solicitud enviada. Una vez que{' '}
-                  <Link href="/dashboard/ventas/autorizaciones" className="underline">
-                    Dirección la autorice
-                  </Link>
-                  , aparecerá sola en "Autorización de subtotal" abajo — no hace falta copiar ningún id.
-                </p>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      <PartidasCard partidas={partidas} moneda={po.moneda} />
+    </div>
+  );
+}
 
-      <PartidasCard poId={po.id} partidas={partidas} vinculos={vinculos} />
+function DocumentoCard({
+  poId,
+  tieneDocumento,
+  cancelada,
+  ejecutar,
+  ocupado,
+  error,
+  setError,
+}: {
+  poId: string;
+  tieneDocumento: boolean;
+  cancelada: boolean;
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
+  error: string | null;
+  setError: (e: string | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [viendo, setViendo] = useState(false);
 
-      {partidas.length > 0 && nrLineas.length > 0 && po.estado !== 'vinculada' && (
-        <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
-          <h2 className="text-sm font-display font-semibold text-rtb-navy">Vincular partidas a líneas de NR</h2>
-          <AgregarVinculoForm partidas={partidas} nrLineas={nrLineas} onAgregar={agregarVinculo} />
+  const elegirArchivo = (file: File | null) => {
+    if (!file) return;
+    if (!DOCUMENTO_PO_MIMES.includes(file.type)) {
+      setError('Sólo se admite PDF, JPG o PNG.');
+      return;
+    }
+    setError(null);
+    setArchivo(file);
+  };
 
-          {propuestos.length > 0 && (
-            <div className="space-y-2">
-              {propuestos.map((v, i) => {
-                const partida = partidas.find((p) => p.id === v.po_partida_id);
-                const nrl = nrLineas.find((n) => n.id === v.nr_linea_id);
-                return (
-                  <div key={i} className="flex items-center justify-between text-xs bg-rtb-surface/60 rounded-lg px-3 py-2">
-                    <span>
-                      Partida #{partida?.linea_numero} ({formatearMoneda(partida?.precio_unitario)}) → {nrl?.nr_folio} · cantidad{' '}
-                      {v.cantidad_cubierta}
-                    </span>
-                    <button onClick={() => quitarVinculo(i)} className="text-destructive">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                );
-              })}
+  // Mismo flujo de 3 pasos que inventario/ajustes/[id]/page.tsx: pedir la
+  // URL firmada de SUBIDA, subir directo al bucket desde el navegador, y
+  // sólo entonces registrar la ruta (ventas_po_adjuntar_evidencia(), 044) —
+  // nunca al revés, para no dejar un estado "fila apunta a un archivo que
+  // no llegó a subirse".
+  const subir = async () => {
+    if (!archivo) return;
+    setError(null);
+    const resUrl = await fetch('/api/ventas/evidencias/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombreArchivo: archivo.name }),
+    });
+    const dataUrl = await resUrl.json().catch(() => ({}));
+    if (!resUrl.ok) {
+      setError(dataUrl?.error ?? 'No se pudo iniciar la subida del documento.');
+      return;
+    }
+    const supabase = createSupabaseBrowserClient();
+    const { error: uploadError } = await supabase.storage
+      .from('evidencias-ventas')
+      .uploadToSignedUrl(dataUrl.path, dataUrl.token, archivo);
+    if (uploadError) {
+      setError('No se pudo subir el archivo: ' + uploadError.message);
+      return;
+    }
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/evidencia`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ evidencia_path: dataUrl.path }),
+    });
+    if (!res.ok) return;
+    toast.success('Documento de PO guardado.');
+    setArchivo(null);
+  };
+
+  const ver = async () => {
+    setViendo(true);
+    const res = await fetch(`/api/ventas/ordenes-compra/${poId}/evidencia`, { cache: 'no-store' });
+    const data = await res.json().catch(() => ({}));
+    setViendo(false);
+    if (!res.ok) {
+      toast.error(data?.error ?? 'No se pudo abrir el documento.');
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  return (
+    <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
+      <h2 className="text-sm font-display font-semibold text-rtb-navy flex items-center gap-2">
+        <FileText className="w-4 h-4" /> Documento de PO del cliente
+      </h2>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {/* Input real oculto — la zona de abajo (clic o arrastrar) es lo que
+          el usuario ve; nunca el <input type="file"> nativo del navegador. */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={DOCUMENTO_PO_EXTENSIONES}
+        className="hidden"
+        onChange={(e) => {
+          elegirArchivo(e.target.files?.[0] ?? null);
+          e.target.value = '';
+        }}
+      />
+
+      {/* Archivo elegido, todavía sin subir — tiene prioridad sobre
+          cualquier otro estado: reemplazar también pasa por aquí. */}
+      {archivo ? (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-dashed border-rtb-teal bg-rtb-teal/5">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 shrink-0 rounded-lg bg-rtb-teal/10 flex items-center justify-center">
+              <FileText className="w-4 h-4 text-rtb-teal" />
             </div>
-          )}
-
-          <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={aceptarCodigo} onChange={(e) => setAceptarCodigo(e.target.checked)} />
-              Aceptar código de producto divergente (si costo/subtotal cuadran)
-            </label>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-rtb-navy truncate">{archivo.name}</p>
+              <p className="text-xs text-muted-foreground">{formatearTamano(archivo.size)}</p>
+            </div>
           </div>
-          <div>
-            <Label className="text-xs">Autorización de subtotal (opcional, sólo si los unitarios varían)</Label>
-            <select
-              value={autorizacionId}
-              onChange={(e) => setAutorizacionId(e.target.value)}
-              className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setArchivo(null)}
+              disabled={ocupado}
+              title="Quitar"
+              className="text-muted-foreground hover:text-destructive p-1"
             >
-              <option value="">Ninguna</option>
-              {autorizadas.map((a) => (
-                <option key={a.id} value={a.id}>
-                  Autorizada {new Date(a.autorizado_at ?? a.created_at).toLocaleDateString('es-MX')} — {a.motivo}
-                </option>
-              ))}
-            </select>
-            {pendientes.length > 0 && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {pendientes.length === 1
-                  ? 'Hay 1 solicitud pendiente de Dirección para esta PO.'
-                  : `Hay ${pendientes.length} solicitudes pendientes de Dirección para esta PO.`}{' '}
-                Aparecerá aquí en cuanto la autoricen.
-              </p>
+              <X className="w-4 h-4" />
+            </button>
+            <Button size="sm" onClick={subir} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+              {ocupado ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1" />}
+              {tieneDocumento ? 'Reemplazar' : 'Subir'}
+            </Button>
+          </div>
+        </div>
+      ) : tieneDocumento ? (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-border bg-rtb-surface/40">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 shrink-0 rounded-lg bg-rtb-teal/10 flex items-center justify-center">
+              <CheckCircle2 className="w-4 h-4 text-rtb-teal" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-rtb-navy">Documento adjunto</p>
+              <p className="text-xs text-muted-foreground">PDF, JPG o PNG</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant="outline" size="sm" onClick={ver} disabled={viendo}>
+              {viendo && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+              Ver documento
+            </Button>
+            {!cancelada && (
+              <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()}>
+                Reemplazar
+              </Button>
             )}
           </div>
-          <Button onClick={validar} disabled={loading} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-            {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Validar y vincular
-          </Button>
+        </div>
+      ) : cancelada ? (
+        <p className="text-xs text-muted-foreground">Sin documento adjunto.</p>
+      ) : (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => inputRef.current?.click()}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && inputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            elegirArchivo(e.dataTransfer.files?.[0] ?? null);
+          }}
+          className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center cursor-pointer transition-colors ${
+            dragOver ? 'border-rtb-teal bg-rtb-teal/5' : 'border-border hover:border-rtb-teal/40 hover:bg-rtb-surface/40'
+          }`}
+        >
+          <div className="w-10 h-10 rounded-full bg-rtb-surface flex items-center justify-center">
+            <Upload className="w-5 h-5 text-rtb-teal" />
+          </div>
+          <p className="text-sm text-foreground">
+            <span className="text-rtb-teal font-medium">Haz clic para elegir un archivo</span> o arrástralo aquí
+          </p>
+          <p className="text-xs text-muted-foreground">PDF, JPG o PNG</p>
         </div>
       )}
     </div>
   );
 }
 
-function PartidasCard({ poId, partidas, vinculos }: { poId: string; partidas: any[]; vinculos: any[] }) {
-  const { ejecutar, ocupado, error } = useAccionServidor();
-  const [agregando, setAgregando] = useState(false);
-  // Se deriva de `partidas` (prop del servidor) en cada render en vez de
-  // congelarse en el useState inicial — con el patrón anterior
-  // (partidas.length + 2 tras cada alta) el número propuesto se
-  // desincronizaba a partir de la segunda partida.
-  const siguienteNumero = partidas.length > 0 ? Math.max(...partidas.map((p) => Number(p.linea_numero))) + 1 : 1;
-  const [lineaNumero, setLineaNumero] = useState<string | null>(null);
-  const [codigoCliente, setCodigoCliente] = useState('');
-  const [descripcion, setDescripcion] = useState('');
-  const [cantidad, setCantidad] = useState('1');
-  const [precioUnitario, setPrecioUnitario] = useState('');
-  const [productoId, setProductoId] = useState<string | null>(null);
-
-  const agregar = async () => {
-    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/partidas`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        linea_numero: Number(lineaNumero ?? siguienteNumero),
-        codigo_cliente: codigoCliente || undefined,
-        descripcion: descripcion || undefined,
-        cantidad: Number(cantidad),
-        precio_unitario: Number(precioUnitario),
-        producto_id: productoId ?? undefined,
-      }),
-    });
-    if (!res.ok) return;
-    setAgregando(false);
-    setLineaNumero(null);
-    setCodigoCliente('');
-    setDescripcion('');
-    setCantidad('1');
-    setPrecioUnitario('');
-    setProductoId(null);
-  };
-
-  // Deshace un vínculo capturado por error (ventas_vinculo_cancelar(), 036)
-  // — nunca borra la fila, sólo la marca 'cancelado'. Reusa el mismo
-  // `ejecutar` de arriba: refresca el árbol de Server Components solo, sin
-  // necesidad de un callback aparte hacia el padre.
-  const cancelarVinculo = (vinculoId: string) => async (motivo: string) => {
-    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/vinculos/${vinculoId}/cancelar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ motivo }),
-    });
-    return res.ok;
-  };
-
+function PartidasCard({ partidas, moneda }: { partidas: any[]; moneda: string }) {
   return (
     <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-display font-semibold text-rtb-navy">Partidas declaradas</h2>
-        {!agregando && (
-          <Button size="sm" onClick={() => setAgregando(true)}>
-            <Plus className="w-3.5 h-3.5 mr-1" /> Agregar partida
-          </Button>
-        )}
-      </div>
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      <h2 className="text-sm font-display font-semibold text-rtb-navy">
+        Partidas — copiadas del pedido al aprobar, no se capturan a mano
+      </h2>
 
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-muted-foreground uppercase">
             <th className="py-1">#</th>
-            <th className="py-1">Código cliente</th>
+            <th className="py-1">Producto</th>
             <th className="py-1 text-right">Cantidad</th>
+            <th className="py-1 text-right">Entregado</th>
+            <th className="py-1 text-right">Pendiente</th>
             <th className="py-1 text-right">Unitario</th>
             <th className="py-1 text-right">Subtotal</th>
-            <th className="py-1">Vínculos</th>
           </tr>
         </thead>
         <tbody>
@@ -355,185 +303,24 @@ function PartidasCard({ poId, partidas, vinculos }: { poId: string; partidas: an
             <tr key={p.id} className="border-t border-border/50">
               <td className="py-2">{p.linea_numero}</td>
               <td className="py-2">
-                {p.codigo_cliente}
-                {p.codigo_divergente && <span className="ml-1 text-[10px] text-amber-700">(divergente aceptado)</span>}
+                <ProductoEtiqueta producto={p.productos} descripcion={p.descripcion} productoId={p.producto_id} />
               </td>
               <td className="py-2 text-right tabular-nums">{p.cantidad}</td>
-              <td className="py-2 text-right tabular-nums">{formatearMoneda(p.precio_unitario)}</td>
-              <td className="py-2 text-right tabular-nums">{formatearMoneda(p.subtotal)}</td>
-              <td className="py-2">
-                <div className="flex flex-col gap-1">
-                  {vinculos
-                    .filter((v) => v.po_partida_id === p.id)
-                    .map((v) => (
-                      <div key={v.id} className="flex items-center gap-1.5">
-                        <VinculoEstadoBadge estado={v.estado} />
-                        <span className="text-[10px] text-muted-foreground tabular-nums">×{v.cantidad_cubierta}</span>
-                        {!VINCULO_NO_CANCELABLE.includes(v.estado) && (
-                          <MotivoDialog
-                            trigger={
-                              <button
-                                type="button"
-                                className="text-muted-foreground hover:text-destructive"
-                                title="Cancelar vínculo"
-                              >
-                                <Ban className="w-3 h-3" />
-                              </button>
-                            }
-                            titulo="Cancelar vínculo PO↔NR"
-                            descripcion="La fila no se borra: queda marcada como cancelada, con quién y por qué. Puedes volver a vincular el mismo par después."
-                            confirmLabel="Cancelar vínculo"
-                            destructivo
-                            onConfirm={cancelarVinculo(v.id)}
-                          />
-                        )}
-                      </div>
-                    ))}
-                  {vinculos.filter((v) => v.po_partida_id === p.id).length === 0 && (
-                    <span className="text-[10px] text-muted-foreground">—</span>
-                  )}
-                </div>
-              </td>
+              <td className="py-2 text-right tabular-nums">{p.cantidad_entregada}</td>
+              <td className="py-2 text-right tabular-nums">{Number(p.cantidad) - Number(p.cantidad_entregada)}</td>
+              <td className="py-2 text-right tabular-nums">{formatearMoneda(p.precio_unitario, moneda)}</td>
+              <td className="py-2 text-right tabular-nums font-medium">{formatearMoneda(p.subtotal, moneda)}</td>
             </tr>
           ))}
           {partidas.length === 0 && (
             <tr>
-              <td colSpan={6} className="py-6 text-center text-muted-foreground text-xs">
-                Sin partidas capturadas todavía.
+              <td colSpan={7} className="py-6 text-center text-muted-foreground text-xs">
+                Sin partidas — es una PO de la Vía A (previa a este cambio).
               </td>
             </tr>
           )}
         </tbody>
       </table>
-
-      {agregando && (
-        <div className="p-3 bg-rtb-surface/60 rounded-lg space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs">Línea #</Label>
-              <input
-                type="number"
-                value={lineaNumero ?? String(siguienteNumero)}
-                onChange={(e) => setLineaNumero(e.target.value)}
-                className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Código del cliente</Label>
-              <input
-                value={codigoCliente}
-                onChange={(e) => setCodigoCliente(e.target.value)}
-                className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Cantidad</Label>
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={cantidad}
-                onChange={(e) => setCantidad(e.target.value)}
-                className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Precio unitario</Label>
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={precioUnitario}
-                onChange={(e) => setPrecioUnitario(e.target.value)}
-                className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
-              />
-            </div>
-          </div>
-          <div>
-            <Label className="text-xs">Descripción (opcional)</Label>
-            <input
-              value={descripcion}
-              onChange={(e) => setDescripcion(e.target.value)}
-              className="mt-1 w-full text-sm border border-border rounded-lg px-3 py-2"
-            />
-          </div>
-          <div>
-            <Label className="text-xs">Producto (opcional, ayuda a comparar el código)</Label>
-            <div className="mt-1">
-              <ProductoCombobox value={productoId} onChange={(id) => setProductoId(id)} />
-            </div>
-          </div>
-          <Button size="sm" onClick={agregar} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
-            {ocupado && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
-            Guardar partida
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AgregarVinculoForm({
-  partidas,
-  nrLineas,
-  onAgregar,
-}: {
-  partidas: any[];
-  nrLineas: any[];
-  onAgregar: (v: VinculoPropuesto) => void;
-}) {
-  const [partidaId, setPartidaId] = useState('');
-  const [nrLineaId, setNrLineaId] = useState('');
-  const [cantidad, setCantidad] = useState('1');
-
-  return (
-    <div className="flex flex-wrap items-end gap-3">
-      <div>
-        <Label className="text-xs">Partida</Label>
-        <select value={partidaId} onChange={(e) => setPartidaId(e.target.value)} className="mt-1 text-sm border border-border rounded-lg px-3 py-2">
-          <option value="">Selecciona…</option>
-          {partidas.map((p) => (
-            <option key={p.id} value={p.id}>
-              #{p.linea_numero} — {formatearMoneda(p.precio_unitario)} × {p.cantidad}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <Label className="text-xs">Línea de NR</Label>
-        <select value={nrLineaId} onChange={(e) => setNrLineaId(e.target.value)} className="mt-1 text-sm border border-border rounded-lg px-3 py-2">
-          <option value="">Selecciona…</option>
-          {nrLineas.map((n) => (
-            <option key={n.id} value={n.id}>
-              {n.nr_folio} — {formatearMoneda(n.precio_unitario)} (entregado {n.cantidad_entregada})
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <Label className="text-xs">Cantidad a cubrir</Label>
-        <input
-          type="number"
-          min="0"
-          step="any"
-          value={cantidad}
-          onChange={(e) => setCantidad(e.target.value)}
-          className="mt-1 w-24 text-sm border border-border rounded-lg px-3 py-2"
-        />
-      </div>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => {
-          if (!partidaId || !nrLineaId || !cantidad) return;
-          onAgregar({ po_partida_id: partidaId, nr_linea_id: nrLineaId, cantidad_cubierta: Number(cantidad) });
-          setPartidaId('');
-          setNrLineaId('');
-          setCantidad('1');
-        }}
-      >
-        <Plus className="w-3.5 h-3.5 mr-1" /> Agregar a la lista
-      </Button>
     </div>
   );
 }
