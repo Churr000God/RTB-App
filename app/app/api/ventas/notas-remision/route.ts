@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 const PAGE_SIZE = 30;
 
@@ -11,7 +12,7 @@ const PAGE_SIZE = 30;
 // agregación, nunca almacenados.
 export async function GET(request: Request) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.remisiones);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);

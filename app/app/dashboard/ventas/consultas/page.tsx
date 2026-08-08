@@ -1,9 +1,10 @@
 export const dynamic = 'force-dynamic';
 
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { ConsultasBandeja } from './consultas-bandeja';
 import { CONSULTA_ESTADOS_ABIERTOS } from '@/lib/ventas/config';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { MessageCircleQuestion } from 'lucide-react';
 
 const PAGE_SIZE = 20;
@@ -17,7 +18,7 @@ const PAGE_SIZE = 20;
 // /api/ventas/consultas (antes .limit(100) sin paginación real y con las
 // dos pestañas filtradas en memoria — AUDITORIA_RTB-VEN-01.md §3.2).
 export default async function ConsultasPage() {
-  const auth = await requireActiveUser();
+  const auth = await requireRole(ACCESO_PANTALLA.consultas);
   const supabase = createSupabaseServerClient();
 
   const { data: consultas, count } = await supabase

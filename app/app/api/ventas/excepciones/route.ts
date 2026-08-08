@@ -4,14 +4,14 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { excepcionCreateSchema } from '@/lib/ventas/schemas';
-import { rolesQuePueden } from '@/lib/ventas/permisos';
+import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 const PAGE_SIZE = 20;
 
 // GET - excepciones de cartera (pendientes/autorizadas/rechazadas), paginado.
 export async function GET(request: Request) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.excepciones);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     const supabase = createSupabaseServerClient();
     let query = supabase
       .from('cliente_excepciones')
-      .select('*', { count: 'exact' })
+      .select('*, entidades(nombre_comercial, nombre_legal)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
     if (entidadId) query = query.eq('entidad_id', entidadId);

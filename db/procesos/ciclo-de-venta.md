@@ -16,25 +16,42 @@ confirmadas con el dueño del proyecto en
 
 ## Quién puede
 
+> **`gerente_comercial` (037, 2026-08-07)** es equivalente a `direccion`
+> en TODO lo de esta página — se añadió a los 8 verbos de abajo con el
+> mismo criterio ("los anteriores"), nunca solo. La única excepción es
+> "Responder una consulta de Compras-ligero": ahí `gerente_comercial`
+> queda fuera a propósito, igual que `ventas` — respondería su propia
+> consulta de costo, la separación que ese verbo existe para proteger.
+> `cobranza` (037) no aparece en ningún verbo de esta lista: es sólo
+> lectura del módulo completo, sin autoridad de escritura en ninguno.
+> Detalle en `sessions/2026-08-07-agente-d-qa-navegacion-ventas.md`.
+
 Cotizar/enviar/aprobar/emitir NR: `ventas` (sólo sus propias
-cotizaciones/pedidos), `direccion`, `super_admin` sin restricción.
+cotizaciones/pedidos), `direccion`, `gerente_comercial`, `super_admin` sin
+restricción de dueño (`gerente_comercial`/`direccion`/`super_admin` operan
+sobre la cotización de cualquier vendedor).
 Despachar una NR y liberar un pedido a Almacén: los anteriores + `almacen`.
 Responder una consulta de Compras-ligero: `compras`, `direccion`,
-`super_admin` — **nunca `ventas`**, que sólo la levanta. Registrar/validar
-una PO: **por rol, no por dueño** — a diferencia de cotizaciones/pedidos,
-`ventas_ordenes_compra_cliente` no tiene `vendedor_id` y
-`ventas_po_validar()` sólo comprueba `current_user_role()`; cualquier
-usuario `ventas`/`direccion`/`super_admin` puede validar/vincular la PO de
-cualquier cliente. "Igual que cotizar" arriba se refiere sólo al conjunto
-de roles, no a la restricción de fila — ver
+`super_admin` — **nunca `ventas` ni `gerente_comercial`**, que sólo la
+levantan. Registrar/validar una PO: **por rol, no por dueño** — a
+diferencia de cotizaciones/pedidos, `ventas_ordenes_compra_cliente` no
+tiene `vendedor_id` y `ventas_po_validar()` sólo comprueba
+`current_user_role()`; cualquier usuario
+`ventas`/`direccion`/`gerente_comercial`/`super_admin` puede
+validar/vincular la PO de cualquier cliente. "Igual que cotizar" arriba se
+refiere sólo al conjunto de roles, no a la restricción de fila — ver
 `contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y el TODO de `CLAUDE.md`
 (pendiente de confirmar con el dueño del proyecto si una PO consolidada
 puede cubrir NR de varios vendedores). Cancelar un vínculo PO↔NR: los
-mismos que validan (`ventas`/`direccion`/`super_admin`), nunca si el
-vínculo ya está `aprobado_para_facturacion`/`facturado`. Resolver una
-autorización de Ventas o una excepción de cartera: sólo
-`direccion`/`super_admin`, y nunca el propio solicitante (estructural, no
-de la API).
+mismos que validan (`ventas`/`direccion`/`gerente_comercial`/`super_admin`),
+nunca si el vínculo ya está `aprobado_para_facturacion`/`facturado`.
+Resolver una autorización de Ventas o una excepción de cartera:
+`direccion`/`gerente_comercial`/`super_admin`, y nunca el propio
+solicitante (estructural — `CHECK` + comprobación de identidad en la
+función, no de la API ni del rol). Congelar y **liberar** cartera:
+`direccion`/`gerente_comercial`/`super_admin` — antes de 037 no había
+ninguna pantalla para liberar, sólo para congelar (ver
+`sessions/2026-08-07-agente-d-qa-navegacion-ventas.md`).
 
 ## Dónde
 

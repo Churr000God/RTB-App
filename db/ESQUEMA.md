@@ -254,7 +254,7 @@ todo lo demás cuelga de esta tabla.)*
 |---|---|---|---|---|
 | `id` | uuid (PK) | no | — | `REFERENCES auth.users(id) ON DELETE CASCADE` |
 | `full_name` | text | no | — | `length(btrim(full_name)) > 0` |
-| `role` | text | no | — | `IN ('super_admin','direccion','ventas','compras','almacen','logistica','facturacion','finanzas')` |
+| `role` | text | no | — | `IN ('super_admin','direccion','ventas','compras','almacen','logistica','facturacion','finanzas','gerente_comercial','cobranza')` (últimos 2 desde `037_roles_comerciales.sql`, 2026-08-07) |
 | `is_active` | boolean | no | `true` | |
 | `created_at` / `updated_at` | timestamptz | no | `now()` | |
 
@@ -891,6 +891,17 @@ estampa el trigger. **RLS:** 8 roles leen; `super_admin`/`direccion`/
 Detalle completo (decisiones confirmadas con el dueño del proyecto,
 2026-08-07) en `sessions/2026-08-07-modulo-ventas.md`. Aquí sólo el
 resumen de columnas — el DDL de `db/migrations/028`…`034` manda.
+
+> **`gerente_comercial`/`cobranza` (`037`, 2026-08-07).** Las menciones de
+> rol de esta sección (`super_admin`/`direccion`/`ventas`/…) describen el
+> estado ANTES de `037` y no se reescribieron una por una.
+> `gerente_comercial` se sumó donde ya estaba `direccion` en las 10
+> funciones `SECURITY DEFINER` y 14 políticas de escritura del módulo
+> (nunca en `ventas_consulta_responder()`/margen/precio de catálogo, fuera
+> de su alcance a propósito); `cobranza` es sólo lectura, en ninguna.
+> Detalle completo, tabla por tabla, en
+> `sessions/2026-08-07-agente-d-qa-navegacion-ventas.md` y en el propio
+> `037_roles_comerciales.sql`.
 
 ### Los tres niveles de precio (`028`)
 

@@ -4,12 +4,12 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { cotizacionUpdateSchema } from '@/lib/ventas/schemas';
-import { rolesQuePueden } from '@/lib/ventas/permisos';
+import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 // GET - detalle de una cotización con sus líneas.
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.cotizaciones);
     if (response) return response;
 
     const supabase = createSupabaseServerClient();

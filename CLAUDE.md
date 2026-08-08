@@ -65,9 +65,12 @@ db/migrations/            # SQL versionado, aplicado vía MCP apply_migration
 contexto/                 # documentos de negocio, marca y specs de cada módulo
 ```
 
-### Roles (8)
+### Roles (10)
 `super_admin`, `direccion`, `ventas`, `compras`, `almacen`, `logistica`,
-`facturacion`, `finanzas`
+`facturacion`, `finanzas`, `gerente_comercial`, `cobranza` (los últimos 2,
+`037_roles_comerciales.sql`, 2026-08-07 — `gerente_comercial` es
+`direccion` sólo dentro de Ventas; `cobranza` es sólo lectura, precursor
+de RTB-PRO-FAC-01)
 
 ### Módulos
 | # | Módulo | Estado |
@@ -1080,6 +1083,61 @@ contra Supabase — ver TODO.
   conservado debajo como registro. Detalle completo en
   `sessions/2026-08-07-correccion-ux-ven01.md`.
 
+- **2026-08-07 (sesión aparte, agente D — QA de navegación de
+  RTB-VEN-01 + alta de roles comerciales)** — El dueño del proyecto pidió
+  recorrer clic a clic el módulo de Ventas con 10 roles (los 8 reales más
+  `gerente_comercial`/`cobranza`, que resultaron no existir) y corregir
+  dos síntomas ya reportados: BUG-NAV-01 (`super_admin` veía contadores en
+  el tablero sin poder profundizar) y BUG-NAV-02 (`ventas` sólo alcanzaba
+  el dashboard y las NR). La investigación descartó la hipótesis de
+  permisos denegados: las 43 políticas `SELECT` de los módulos operativos
+  son role-agnostic, los 20 GET de `/api/ventas/*` llamaban
+  `requireApiRole()` sin argumento, y ninguno de los 13 `page.tsx` del
+  árbol comprobaba rol — **no había ningún bloqueo**. La causa real, única
+  para ambos síntomas, era navegación ausente: el sidebar registraba un
+  solo item de Ventas sin sub-items y las 7 tarjetas KPI del tablero eran
+  `<div>` sin `href`. Corrección (`db/migrations/037_roles_comerciales.sql`
+  + capa TypeScript): `profiles_role_check` amplía a 10 roles
+  (`gerente_comercial` = `direccion` sólo dentro de Ventas;
+  `cobranza` = sólo lectura, precursor de RTB-PRO-FAC-01) — cada
+  `create or replace` de las 10 funciones `SECURITY DEFINER` tocadas se
+  construyó desde `pg_get_functiondef()` de la base viva, no de las
+  migraciones 031/032/033 originales, para no revertir en silencio los
+  fixes de 035/036 (verificado con diff estructural después). Nueva
+  constante `ACCESO_PANTALLA` (`lib/ventas/permisos.ts`) como fuente única
+  para el submenú del sidebar (`NavItem` gana `children`), los `href` de
+  las tarjetas del tablero, el nuevo `app/dashboard/ventas/layout.tsx`
+  (`requireRole()`, no existía) y cada `page.tsx`/GET de API individual.
+  Las dos pantallas `nueva` (cotizaciones, PO) eran `'use client'` sin
+  ningún guard de servidor — se dividieron en Server Component + form
+  cliente. Dos pantallas construidas desde cero,
+  `/dashboard/ventas/{congelamientos,excepciones}` — sus APIs existían
+  huérfanas desde la sesión original del módulo; en particular
+  `congelamientos/[id]/liberar` no tenía ningún consumidor de UI, así que
+  un cliente congelado era irreversible desde el navegador. Verificado con
+  32 aserciones SQL simulando rol real (anti-autoaprobación de
+  `gerente_comercial` confirmada por identidad, no por rol; no regresión
+  de los 8 roles existentes) y clic a clic real con 5 de los 10 usuarios
+  QA: BUG-NAV-01/02 cerrados con clic real, ciclo completo
+  congelar→liberar sobre una entidad real, y el guard nuevo confirmado
+  como redirect de servidor (no sólo sidebar oculto) para `logistica`
+  (excluido del todo) y `cobranza` (excluido de `cotizaciones`). Un
+  incidente de HMR de `next dev` (no del código: `docker build
+  --target builder` limpio) tras convertir una de las páginas `nueva` de
+  client a server component se resolvió con `docker compose restart web`.
+  `npx tsc --noEmit` y `docker build --target builder` limpios,
+  `get_advisors` sin `ERROR` nuevo. De paso, deduplicadas
+  `ROLES_AUTORIZAN_VENTAS`/`ROLES_RESPONDEN_CONSULTA`/`ROLES_DESPACHAN_NR`
+  (vivían repetidas en `lib/ventas/config.ts` y `permisos.ts`) y sustituidas
+  38 listas literales de "los 8 roles" en las tres matrices de permisos
+  (`lib/{entidades,inventario,ventas}/permisos.ts`) por la constante nueva
+  `TODOS_LOS_ROLES` (`types/database.ts`) — sin eso, un alta de rol futura
+  quedaría ciega en silencio en 38 sitios distintos. 2 usuarios QA nuevos
+  creados vía `POST /api/admin/users` (único camino correcto):
+  `qa.gerente.comercial@qa.refacrtb.mx` / `qa.cobranza@qa.refacrtb.mx`.
+  Detalle completo, incluida la matriz pantalla×rol y las observaciones
+  sin corregir, en `sessions/2026-08-07-agente-d-qa-navegacion-ventas.md`.
+
 ## TODO
 
 - Instalar `graphify` y correr `/graphify .` cuando haya más código real más allá
@@ -1148,3 +1206,20 @@ contra Supabase — ver TODO.
   consolidada de un cliente puede cubrir NR de varios vendedores? Si la
   respuesta es no, la corrección es restringir `ventas_po_validar()` por
   `vendedor_id` de las NR vinculadas — no requiere columna nueva.
+- **`gerente_comercial` en `clientes_update` (037), punto más probable de
+  revisión.** Incluir a `gerente_comercial` en esa política le da
+  autoridad sobre `limite_credito`/`descuento_maximo`/`vendedor_id` (ya
+  expuestas por el `GRANT` de columna existente) — se incluyó porque
+  `ventas` ya la tiene y no separar esas columnas fue la decisión más
+  rápida, no necesariamente la más fina. Si el dueño del proyecto quiere
+  que el gerente comercial vea la política comercial pero no reasigne
+  cartera entre vendedores, la corrección es un `GRANT UPDATE` por
+  columna más estrecho para ese rol, no tocar la política completa.
+- **`profiles_select` limita a cada usuario a su propia fila** — con los
+  2 roles nuevos de 037, `gerente_comercial` (que ahora opera
+  cotizaciones/NR de cualquier vendedor) ve en blanco el nombre de ese
+  vendedor en cualquier join contra `profiles`. Ya afectaba a `direccion`
+  desde antes de esta sesión; no se tocó porque ampliar esa política es
+  una decisión de alcance mayor (qué tan visible debe ser el directorio
+  de usuarios) que no correspondía decidir dentro de una sesión de
+  navegación.

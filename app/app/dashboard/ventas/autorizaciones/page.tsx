@@ -1,8 +1,9 @@
 export const dynamic = 'force-dynamic';
 
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { AutorizacionesBandeja } from './autorizaciones-bandeja';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { ShieldCheck } from 'lucide-react';
 
 const PAGE_SIZE = 20;
@@ -12,14 +13,16 @@ const PAGE_SIZE = 20;
 // documento. Resolver exige que el aprobador no sea el solicitante
 // (CHECK + comprobación en ventas_autorizacion_resolver()). Paginada
 // (antes .limit(100) sin paginación real — AUDITORIA_RTB-VEN-01.md §3.2).
-export default async function AutorizacionesPage() {
-  const auth = await requireActiveUser();
+export default async function AutorizacionesPage({ searchParams }: { searchParams: { estado?: string } }) {
+  const auth = await requireRole(ACCESO_PANTALLA.autorizaciones);
   const supabase = createSupabaseServerClient();
-  const { data: autorizaciones, count } = await supabase
+  let query = supabase
     .from('ventas_autorizaciones')
     .select('*', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(0, PAGE_SIZE - 1);
+  if (searchParams.estado) query = query.eq('estado', searchParams.estado);
+  const { data: autorizaciones, count } = await query;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -36,6 +39,7 @@ export default async function AutorizacionesPage() {
         pageSize={PAGE_SIZE}
         rol={auth.profile.role}
         userId={auth.userId}
+        estadoInicial={searchParams.estado}
       />
     </div>
   );

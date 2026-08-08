@@ -7,6 +7,10 @@ export interface NavItem {
   icon: LucideIcon;
   roles: UserRole[] | 'all';
   badge?: string;
+  /** Sub-items (submenú) — hoy sólo Ventas los usa (037). Cada uno filtra
+   *  por rol igual que un NavItem de primer nivel; getNavForRole() los
+   *  recorta también. */
+  children?: NavItem[];
 }
 
 export interface NavSection {

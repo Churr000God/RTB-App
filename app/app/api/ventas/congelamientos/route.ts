@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { congelamientoCreateSchema } from '@/lib/ventas/schemas';
-import { rolesQuePueden } from '@/lib/ventas/permisos';
+import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 const PAGE_SIZE = 20;
 
@@ -12,7 +12,7 @@ const PAGE_SIZE = 20;
 // paginado. Ordena por congelado_at (no created_at) — la fecha de negocio.
 export async function GET(request: Request) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.congelamientos);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     const supabase = createSupabaseServerClient();
     let query = supabase
       .from('cliente_congelamientos')
-      .select('*', { count: 'exact' })
+      .select('*, entidades(nombre_comercial, nombre_legal)', { count: 'exact' })
       .order('congelado_at', { ascending: false })
       .range(from, to);
     if (entidadId) query = query.eq('entidad_id', entidadId);

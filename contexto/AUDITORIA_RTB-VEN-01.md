@@ -27,6 +27,18 @@ cualquier línea de cotización desde el navegador** — corregido en el
 momento por ser de una sola línea y bloquear el resto de la verificación.
 Detalle completo en §7.
 
+**Actualización 2026-08-07 (sesión aparte, agente D — QA de navegación)** —
+el dueño del proyecto reportó dos síntomas nuevos, fuera de la numeración
+de esta auditoría: `super_admin` veía los contadores del tablero sin poder
+profundizar, y `ventas` sólo alcanzaba el dashboard y las NR. La causa no
+era ningún hallazgo de permisos de los de abajo — era navegación ausente
+(sidebar sin submenú, tarjetas del tablero sin `href`), corregida junto
+con la creación de los 2 roles que el encargo asumía
+(`gerente_comercial`/`cobranza`, antes inexistentes) y de las pantallas
+`/dashboard/ventas/{congelamientos,excepciones}`, huérfanas desde esta
+misma auditoría original. Detalle completo en
+`sessions/2026-08-07-agente-d-qa-navegacion-ventas.md`.
+
 ## 0. Resumen ejecutivo
 
 | Bloque | Estado |

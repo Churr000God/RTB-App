@@ -218,15 +218,13 @@ export const EVIDENCIA_VENTAS_BYTES_MAX = 10 * 1024 * 1024;
  *  (030) exige que exista, sin importar el valor. */
 export const VIGENCIA_COTIZACION_DIAS_DEFAULT = 15;
 
-/** Roles que pueden autorizar excepciones/correcciones de Ventas —
- *  espejo de ventas_autorizacion_resolver() (033) y
- *  cliente_excepciones (029, resolución vía API). */
-export const ROLES_AUTORIZAN_VENTAS = ['super_admin', 'direccion'] as const;
-
-/** Roles que pueden responder una consulta de Compras-ligero — espejo de
- *  ventas_consulta_responder() (030). */
-export const ROLES_RESPONDEN_CONSULTA = ['super_admin', 'direccion', 'compras'] as const;
-
-/** Roles que pueden despachar una NR (kardex) — espejo de
- *  ventas_nr_despachar() (032). */
-export const ROLES_DESPACHAN_NR = ['super_admin', 'direccion', 'almacen', 'ventas'] as const;
+// ROLES_AUTORIZAN_VENTAS/ROLES_RESPONDEN_CONSULTA/ROLES_DESPACHAN_NR vivían
+// aquí duplicadas de lib/ventas/permisos.ts (mismos valores, nombres
+// distintos — dos fuentes de verdad para la misma política). Reexportadas
+// desde ahí (037) para que un alta de rol futura sólo tenga un sitio que
+// actualizar.
+export {
+  ROLES_AUTORIZAN as ROLES_AUTORIZAN_VENTAS,
+  ROLES_RESPONDEN_CONSULTA,
+  ROLES_DESPACHAN as ROLES_DESPACHAN_NR,
+} from './permisos';

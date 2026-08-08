@@ -5,7 +5,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { poCreateSchema } from '@/lib/ventas/schemas';
 import { mensajeErrorPo } from '@/lib/ventas/errores';
-import { rolesQuePueden } from '@/lib/ventas/permisos';
+import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 const PAGE_SIZE = 20;
 
@@ -16,7 +16,7 @@ const PAGE_SIZE = 20;
 // ordenes-compra-explorer.tsx) — es aditivo, no rompe ningún contrato previo.
 export async function GET(request: Request) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.ordenes_compra);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);

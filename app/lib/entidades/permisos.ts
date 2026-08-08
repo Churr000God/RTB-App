@@ -1,4 +1,4 @@
-import type { UserRole } from '@/types/database';
+import { TODOS_LOS_ROLES, type UserRole } from '@/types/database';
 
 export type RecursoEntidades =
   | 'entidades'
@@ -26,27 +26,27 @@ type Accion = 'select' | 'insert' | 'update';
  */
 const MATRIZ: Record<RecursoEntidades, Partial<Record<Accion, UserRole[]>>> = {
   entidades: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'ventas', 'compras'],
     update: ['super_admin', 'direccion', 'ventas', 'compras'],
   },
   clientes: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'ventas'],
     update: ['super_admin', 'direccion', 'ventas'],
   },
   proveedores: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras'],
     update: ['super_admin', 'direccion', 'compras'],
   },
   contactos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas'],
     update: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas'],
   },
   direcciones: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'ventas', 'compras', 'almacen', 'logistica'],
     update: ['super_admin', 'direccion', 'ventas', 'compras', 'almacen', 'logistica'],
   },
@@ -56,7 +56,7 @@ const MATRIZ: Record<RecursoEntidades, Partial<Record<Accion, UserRole[]>>> = {
     update: ['super_admin', 'finanzas'],
   },
   ubicaciones: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen'],
     update: ['super_admin', 'direccion', 'almacen'],
   },

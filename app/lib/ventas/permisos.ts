@@ -1,4 +1,4 @@
-import type { UserRole } from '@/types/database';
+import { TODOS_LOS_ROLES, type UserRole } from '@/types/database';
 
 export type RecursoVentas =
   | 'cotizaciones'
@@ -41,67 +41,105 @@ type Accion = 'select' | 'insert' | 'update';
  */
 const MATRIZ: Record<RecursoVentas, Partial<Record<Accion, UserRole[]>>> = {
   cotizaciones: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
-    update: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+    update: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   cotizacion_lineas: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
-    update: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+    update: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   consultas_compras: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
     // Sin 'update' real por GRANT: la respuesta pasa por función, ver docstring.
   },
   pedidos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     // Sin insert/update por GRANT: nace y transiciona por función.
   },
   notas_remision: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
   },
   nr_seguimientos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   ordenes_compra: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   po_partidas: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   vinculos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
   },
   cliente_congelamientos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion'],
-    update: ['super_admin', 'direccion'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial'],
+    update: ['super_admin', 'direccion', 'gerente_comercial'],
   },
   cliente_excepciones: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   ventas_autorizaciones: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
-    insert: ['super_admin', 'direccion', 'ventas'],
+    select: TODOS_LOS_ROLES,
+    insert: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
   },
   margenes: {
     // producto_familias.margen_porcentaje: fuera del GRANT UPDATE de 009,
     // sólo escribible por API con service_role tras validar rol (028).
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    // gerente_comercial NO está aquí a propósito: precio/margen de
+    // catálogo es autoridad fuera de Ventas (037).
+    select: TODOS_LOS_ROLES,
     update: ['super_admin', 'direccion'],
   },
   precio_venta: {
     // producto_precio_venta: sólo por producto_precio_venta_fijar()/
-    // _revertir() (028), invocables únicamente por super_admin/direccion.
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    // _revertir() (028), invocables únicamente por super_admin/direccion —
+    // gerente_comercial NO está aquí a propósito, mismo motivo que margenes.
+    select: TODOS_LOS_ROLES,
     update: ['super_admin', 'direccion'],
   },
+};
+
+/** Qué roles pueden ENTRAR a cada pantalla del módulo de Ventas — fuente
+ *  única para el guard real de cada page.tsx/layout.tsx, los sub-items del
+ *  sidebar (lib/rbac/config.ts) y los enlaces del tablero. Antes de 037 no
+ *  existía ningún guard de este tipo: el sidebar y las páginas no
+ *  compartían origen, que es la causa raíz de BUG-NAV-01/BUG-NAV-02
+ *  (contexto/AUDITORIA_RTB-VEN-01.md, sesión de navegación 2026-08-07) —
+ *  ambos síntomas eran de navegación ausente, no de permisos denegados.
+ *  Quién puede *actuar* dentro de una pantalla permitida lo sigue
+ *  decidiendo MATRIZ/RLS/RPC, no esta tabla. */
+export type PantallaVentas =
+  | 'tablero'
+  | 'cotizaciones'
+  | 'pedidos'
+  | 'remisiones'
+  | 'ordenes_compra'
+  | 'autorizaciones'
+  | 'congelamientos'
+  | 'excepciones'
+  | 'consultas';
+
+// Record<PantallaVentas, UserRole[]> a propósito, sin `as const`: NavItem.roles
+// (types/navigation.ts) exige un arreglo MUTABLE, y `as const` produciría
+// tuplas readonly que TypeScript no acepta ahí.
+export const ACCESO_PANTALLA: Record<PantallaVentas, UserRole[]> = {
+  tablero: ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'compras', 'almacen', 'cobranza'],
+  cotizaciones: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+  pedidos: ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'almacen'],
+  remisiones: ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'almacen', 'cobranza'],
+  ordenes_compra: ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'cobranza'],
+  autorizaciones: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+  congelamientos: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+  excepciones: ['super_admin', 'direccion', 'gerente_comercial', 'ventas'],
+  consultas: ['super_admin', 'direccion', 'gerente_comercial', 'ventas', 'compras'],
 };
 
 export function puede(rol: UserRole | null | undefined, recurso: RecursoVentas, accion: Accion): boolean {
@@ -118,11 +156,11 @@ export function rolesQuePueden(recurso: RecursoVentas, accion: Accion): UserRole
 /** Roles que pueden resolver una excepción/autorización de Ventas —
  *  siempre requiere que el aprobador no sea el propio solicitante
  *  (comprobado en la función SQL, no sólo aquí). */
-export const ROLES_AUTORIZAN: UserRole[] = ['super_admin', 'direccion'];
+export const ROLES_AUTORIZAN: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial'];
 
 /** Roles que pueden despachar una NR al kardex — espejo de
- *  ventas_nr_despachar() (032). */
-export const ROLES_DESPACHAN: UserRole[] = ['super_admin', 'direccion', 'almacen', 'ventas'];
+ *  ventas_nr_despachar() (037, sobre la base de 032/035). */
+export const ROLES_DESPACHAN: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial', 'almacen', 'ventas'];
 
 /** Roles que pueden responder una consulta de Compras-ligero — espejo de
  *  ventas_consulta_responder() (030). 'ventas' NUNCA está aquí: levanta la

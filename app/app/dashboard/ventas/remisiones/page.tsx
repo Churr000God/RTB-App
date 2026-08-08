@@ -1,11 +1,12 @@
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { NREstadoBadge } from '@/components/ventas/estado-badge';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
 import { NR_ESTADO_LABELS } from '@/lib/ventas/config';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { NR_ESTADOS, type TableroNrRow } from '@/types/ventas';
 import { FileStack } from 'lucide-react';
 
@@ -13,7 +14,7 @@ import { FileStack } from 'lucide-react';
 // filtro por estado. La antigüedad y el monto pendiente se calculan por
 // agregación en ventas_tablero_nr() (034) — nunca almacenados.
 export default async function RemisionesPage({ searchParams }: { searchParams: { estado?: string } }) {
-  await requireActiveUser();
+  await requireRole(ACCESO_PANTALLA.remisiones);
   const supabase = createSupabaseServerClient();
 
   const { data: tablero } = await supabase.rpc('ventas_tablero_nr', {

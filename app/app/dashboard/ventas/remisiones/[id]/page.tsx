@@ -1,12 +1,13 @@
 export const dynamic = 'force-dynamic';
 
 import { notFound } from 'next/navigation';
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { NrDetalle } from './nr-detalle';
 
 export default async function NrDetallePage({ params }: { params: { id: string } }) {
-  const auth = await requireActiveUser();
+  const auth = await requireRole(ACCESO_PANTALLA.remisiones);
   const supabase = createSupabaseServerClient();
 
   const { data: nr } = await supabase

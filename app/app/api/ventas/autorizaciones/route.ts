@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { ventasAutorizacionCreateSchema } from '@/lib/ventas/schemas';
-import { rolesQuePueden } from '@/lib/ventas/permisos';
+import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 const PAGE_SIZE = 20;
 
@@ -16,7 +16,7 @@ const PAGE_SIZE = 20;
 // usuario pegue el UUID a mano (§3.4 de AUDITORIA_RTB-VEN-01.md).
 export async function GET(request: Request) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.autorizaciones);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);

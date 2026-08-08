@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { cotizacionCreateSchema } from '@/lib/ventas/schemas';
-import { rolesQuePueden } from '@/lib/ventas/permisos';
+import { rolesQuePueden, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 const PAGE_SIZE = 20;
 
@@ -12,7 +12,7 @@ const PAGE_SIZE = 20;
 // a los 8 roles operativos (espejo de la RLS select de ventas_cotizaciones).
 export async function GET(request: Request) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.cotizaciones);
     if (response) return response;
 
     const { searchParams } = new URL(request.url);

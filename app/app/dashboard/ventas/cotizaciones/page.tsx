@@ -1,18 +1,18 @@
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { CotizacionEstadoBadge } from '@/components/ventas/estado-badge';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
-import { puede } from '@/lib/ventas/permisos';
+import { puede, ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { FileText, Plus } from 'lucide-react';
 
-// Listado de cotizaciones. Visibilidad amplia (los 8 roles operativos);
-// alta restringida a super_admin/direccion/ventas — mismo criterio que
-// /dashboard/inventario/ajustes.
+// Listado de cotizaciones. Acceso de pantalla: ACCESO_PANTALLA.cotizaciones
+// (037); alta restringida a super_admin/direccion/gerente_comercial/ventas
+// — mismo criterio que /dashboard/inventario/ajustes.
 export default async function CotizacionesPage({ searchParams }: { searchParams: { estado?: string } }) {
-  const auth = await requireActiveUser();
+  const auth = await requireRole(ACCESO_PANTALLA.cotizaciones);
   const puedeCrear = puede(auth.profile.role, 'cotizaciones', 'insert');
 
   const supabase = createSupabaseServerClient();

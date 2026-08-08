@@ -1,12 +1,13 @@
 export const dynamic = 'force-dynamic';
 
 import { notFound } from 'next/navigation';
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { PedidoDetalle } from './pedido-detalle';
 
 export default async function PedidoDetallePage({ params }: { params: { id: string } }) {
-  await requireActiveUser();
+  await requireRole(ACCESO_PANTALLA.pedidos);
   const supabase = createSupabaseServerClient();
 
   const { data: pedido } = await supabase

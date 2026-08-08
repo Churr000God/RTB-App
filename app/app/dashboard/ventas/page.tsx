@@ -1,10 +1,11 @@
 export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { NREstadoBadge } from '@/components/ventas/estado-badge';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import type { TableroNrRow } from '@/types/ventas';
 import { ShoppingCart } from 'lucide-react';
 
@@ -14,7 +15,7 @@ import { ShoppingCart } from 'lucide-react';
 // sin factura — y se resalta con el borde dorado, mismo idioma visual que
 // "pendientes de autorización" en /dashboard/inventario/ajustes.
 export default async function VentasDashboardPage() {
-  await requireActiveUser();
+  const auth = await requireRole(ACCESO_PANTALLA.tablero);
   const supabase = createSupabaseServerClient();
 
   const [{ data: kpis }, { data: tablero }] = await Promise.all([
@@ -24,14 +25,54 @@ export default async function VentasDashboardPage() {
 
   const filas = (tablero ?? []) as TableroNrRow[];
 
+  // Cada tarjeta enlaza a su listado ya filtrado — antes eran <div> inertes
+  // sin destino (BUG-NAV-01: un super_admin leía "Cotizaciones en
+  // borrador: 3" pero no podía profundizar). href=null cuando el rol no
+  // tiene acceso a esa pantalla (ACCESO_PANTALLA, 037): se muestra el
+  // número igual, pero sin volverlo clicable a una redirección.
+  const rol = auth.profile.role;
   const tarjetas = [
-    { label: 'Cotizaciones en borrador', valor: kpis?.cotizaciones_borrador ?? 0 },
-    { label: 'Cotizaciones enviadas', valor: kpis?.cotizaciones_enviadas ?? 0 },
-    { label: 'NR entregadas / sin PO', valor: kpis?.nr_entregadas_sin_po ?? 0, alerta: true },
-    { label: 'NR parcialmente respaldadas', valor: kpis?.nr_parcialmente_respaldadas ?? 0 },
-    { label: 'PO pendiente de confirmación', valor: kpis?.po_pendiente_confirmacion ?? 0 },
-    { label: 'Autorizaciones pendientes', valor: kpis?.autorizaciones_pendientes ?? 0 },
-    { label: 'Clientes congelados', valor: kpis?.clientes_congelados ?? 0, alerta: true },
+    {
+      label: 'Cotizaciones en borrador',
+      valor: kpis?.cotizaciones_borrador ?? 0,
+      href: ACCESO_PANTALLA.cotizaciones.includes(rol) ? '/dashboard/ventas/cotizaciones?estado=borrador' : null,
+    },
+    {
+      label: 'Cotizaciones enviadas',
+      valor: kpis?.cotizaciones_enviadas ?? 0,
+      href: ACCESO_PANTALLA.cotizaciones.includes(rol) ? '/dashboard/ventas/cotizaciones?estado=enviada' : null,
+    },
+    {
+      label: 'NR entregadas / sin PO',
+      valor: kpis?.nr_entregadas_sin_po ?? 0,
+      alerta: true,
+      href: ACCESO_PANTALLA.remisiones.includes(rol) ? '/dashboard/ventas/remisiones?estado=entregada_sin_po' : null,
+    },
+    {
+      label: 'NR parcialmente respaldadas',
+      valor: kpis?.nr_parcialmente_respaldadas ?? 0,
+      href: ACCESO_PANTALLA.remisiones.includes(rol)
+        ? '/dashboard/ventas/remisiones?estado=parcialmente_respaldada'
+        : null,
+    },
+    {
+      label: 'PO pendiente de confirmación',
+      valor: kpis?.po_pendiente_confirmacion ?? 0,
+      href: ACCESO_PANTALLA.ordenes_compra.includes(rol)
+        ? '/dashboard/ventas/ordenes-compra?estado=pendiente_de_confirmacion'
+        : null,
+    },
+    {
+      label: 'Autorizaciones pendientes',
+      valor: kpis?.autorizaciones_pendientes ?? 0,
+      href: ACCESO_PANTALLA.autorizaciones.includes(rol) ? '/dashboard/ventas/autorizaciones?estado=pendiente' : null,
+    },
+    {
+      label: 'Clientes congelados',
+      valor: kpis?.clientes_congelados ?? 0,
+      alerta: true,
+      href: ACCESO_PANTALLA.congelamientos.includes(rol) ? '/dashboard/ventas/congelamientos?estado=activo' : null,
+    },
   ];
 
   return (
@@ -54,16 +95,26 @@ export default async function VentasDashboardPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {tarjetas.map((t) => (
-          <div
-            key={t.label}
-            className={`bg-white rounded-xl p-4 ${t.alerta && Number(t.valor) > 0 ? 'border-l-4 border-l-rtb-gold' : ''}`}
-            style={{ boxShadow: 'var(--shadow-sm)' }}
-          >
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.label}</p>
-            <p className="text-2xl font-display font-bold text-rtb-navy mt-1 tabular-nums">{t.valor}</p>
-          </div>
-        ))}
+        {tarjetas.map((t) => {
+          const clases = `bg-white rounded-xl p-4 ${t.alerta && Number(t.valor) > 0 ? 'border-l-4 border-l-rtb-gold' : ''} ${
+            t.href ? 'hover:shadow-md transition-shadow cursor-pointer' : ''
+          }`;
+          const contenido = (
+            <>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.label}</p>
+              <p className="text-2xl font-display font-bold text-rtb-navy mt-1 tabular-nums">{t.valor}</p>
+            </>
+          );
+          return t.href ? (
+            <Link key={t.label} href={t.href} className={clases} style={{ boxShadow: 'var(--shadow-sm)' }}>
+              {contenido}
+            </Link>
+          ) : (
+            <div key={t.label} className={clases} style={{ boxShadow: 'var(--shadow-sm)' }}>
+              {contenido}
+            </div>
+          );
+        })}
       </div>
 
       <div className="flex items-center justify-between">

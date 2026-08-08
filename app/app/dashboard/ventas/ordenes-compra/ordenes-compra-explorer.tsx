@@ -11,28 +11,37 @@ interface Props {
   initialCount: number;
   pageSize: number;
   puedeCrear: boolean;
+  /** Filtro ?estado= con el que llegó la primera página (ya aplicado por
+   *  el Server Component) — se repite en cada fetch de paginación para no
+   *  perderlo al cambiar de página. */
+  estadoInicial?: string;
 }
 
-export function OrdenesCompraExplorer({ initialData, initialCount, pageSize, puedeCrear }: Props) {
+export function OrdenesCompraExplorer({ initialData, initialCount, pageSize, puedeCrear, estadoInicial }: Props) {
   const [data, setData] = useState(initialData);
   const [count, setCount] = useState(initialCount);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  const cargar = useCallback(async (p: number) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/ventas/ordenes-compra?page=${p}`, { cache: 'no-store' });
-      const json = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setData(json.data ?? []);
-        setCount(json.count ?? 0);
-        setPage(p);
+  const cargar = useCallback(
+    async (p: number) => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ page: String(p) });
+        if (estadoInicial) params.set('estado', estadoInicial);
+        const res = await fetch(`/api/ventas/ordenes-compra?${params.toString()}`, { cache: 'no-store' });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok) {
+          setData(json.data ?? []);
+          setCount(json.count ?? 0);
+          setPage(p);
+        }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    [estadoInicial]
+  );
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -44,6 +53,11 @@ export function OrdenesCompraExplorer({ initialData, initialCount, pageSize, pue
           <p className="text-muted-foreground mt-1">
             Una sola partida con costo distinto bloquea la PO completa — sin excepción de Dirección.
           </p>
+          {estadoInicial && (
+            <Link href="/dashboard/ventas/ordenes-compra" className="text-xs text-rtb-teal hover:underline">
+              Filtrando por estado «{estadoInicial}» — ver todas
+            </Link>
+          )}
         </div>
         {puedeCrear && (
           <Link

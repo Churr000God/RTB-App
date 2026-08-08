@@ -3,11 +3,12 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 // GET - tarjetas KPI del tablero de Ventas (ventas_kpis(), 034).
 export async function GET() {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.tablero);
     if (response) return response;
 
     const supabase = createSupabaseServerClient();

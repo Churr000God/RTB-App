@@ -1,12 +1,13 @@
 export const dynamic = 'force-dynamic';
 
 import { notFound } from 'next/navigation';
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { CotizacionDetalle } from './cotizacion-detalle';
 
 export default async function CotizacionDetallePage({ params }: { params: { id: string } }) {
-  const auth = await requireActiveUser();
+  const auth = await requireRole(ACCESO_PANTALLA.cotizaciones);
   const supabase = createSupabaseServerClient();
 
   const { data: cotizacion } = await supabase

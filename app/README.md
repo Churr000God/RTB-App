@@ -66,8 +66,10 @@ yarn dev
 | `compras` | Gestor de compras |
 | `almacen` | Personal de almacén |
 | `logistica` | Motorista/repartidor |
-| `facturacion` | Facturación y cobranza |
+| `facturacion` | Facturación |
 | `finanzas` | Administración financiera |
+| `gerente_comercial` | Dirección, sólo dentro de Ventas (037) |
+| `cobranza` | Sólo lectura de Ventas — precursor de RTB-PRO-FAC-01 (037) |
 
 ## Estructura del proyecto
 

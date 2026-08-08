@@ -20,11 +20,12 @@ import {
   Library,
   Repeat,
   FileCheck2,
+  Snowflake,
+  HelpCircle,
 } from 'lucide-react';
 import { type NavSection, type NavItem } from '@/types/navigation';
-import { USER_ROLES, type UserRole } from '@/types/database';
-
-const ALL_ROLES: UserRole[] = [...USER_ROLES];
+import { type UserRole } from '@/types/database';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   super_admin: 'Super Admin',
@@ -35,6 +36,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   logistica: 'Logística',
   facturacion: 'Facturación',
   finanzas: 'Finanzas',
+  gerente_comercial: 'Gerente Comercial',
+  cobranza: 'Cobranza',
 };
 
 export const ROLE_COLORS: Record<UserRole, string> = {
@@ -46,7 +49,17 @@ export const ROLE_COLORS: Record<UserRole, string> = {
   logistica: 'bg-green-100 text-green-800',
   facturacion: 'bg-indigo-100 text-indigo-800',
   finanzas: 'bg-rose-100 text-rose-800',
+  gerente_comercial: 'bg-cyan-100 text-cyan-800',
+  cobranza: 'bg-orange-100 text-orange-800',
 };
+
+// Unión de todos los roles que aparecen en ACCESO_PANTALLA (lib/ventas/
+// permisos.ts) — una sola fuente para el item de nav de Ventas y para el
+// guard real de app/dashboard/ventas/layout.tsx, en vez de mantener el
+// mismo conjunto de roles escrito dos veces.
+const ROLES_VENTAS: UserRole[] = Array.from(
+  new Set(Object.values(ACCESO_PANTALLA).flat())
+) as UserRole[];
 
 // Título de la sección de NAV_SECTIONS que /dashboard reutiliza como
 // fuente única de qué módulos existen y a qué rol se le muestran — evita
@@ -150,10 +163,46 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Ventas',
         href: '/dashboard/ventas',
         icon: ShoppingCart,
-        // 'compras' responde consultas de Compras-ligero, 'almacen' libera
-        // pedidos/despacha NR — ambos necesitan llegar al módulo, aunque
-        // su superficie de acción real la limita RLS/lib/ventas/permisos.ts.
-        roles: ['super_admin', 'direccion', 'ventas', 'compras', 'almacen'],
+        // roles = unión de ACCESO_PANTALLA (037) — antes esta lista se
+        // mantenía a mano y perdía sincronía con las pantallas reales, la
+        // causa raíz de BUG-NAV-01/02 (contexto/AUDITORIA_RTB-VEN-01.md).
+        roles: ROLES_VENTAS,
+        children: [
+          { label: 'Tablero', href: '/dashboard/ventas', icon: LayoutDashboard, roles: ACCESO_PANTALLA.tablero },
+          {
+            label: 'Cotizaciones',
+            href: '/dashboard/ventas/cotizaciones',
+            icon: FileText,
+            roles: ACCESO_PANTALLA.cotizaciones,
+          },
+          { label: 'Pedidos', href: '/dashboard/ventas/pedidos', icon: ClipboardList, roles: ACCESO_PANTALLA.pedidos },
+          { label: 'Remisiones', href: '/dashboard/ventas/remisiones', icon: Truck, roles: ACCESO_PANTALLA.remisiones },
+          {
+            label: 'Órdenes de compra',
+            href: '/dashboard/ventas/ordenes-compra',
+            icon: ShoppingBag,
+            roles: ACCESO_PANTALLA.ordenes_compra,
+          },
+          {
+            label: 'Autorizaciones',
+            href: '/dashboard/ventas/autorizaciones',
+            icon: FileCheck2,
+            roles: ACCESO_PANTALLA.autorizaciones,
+          },
+          {
+            label: 'Congelamientos',
+            href: '/dashboard/ventas/congelamientos',
+            icon: Snowflake,
+            roles: ACCESO_PANTALLA.congelamientos,
+          },
+          {
+            label: 'Excepciones',
+            href: '/dashboard/ventas/excepciones',
+            icon: AlertTriangle,
+            roles: ACCESO_PANTALLA.excepciones,
+          },
+          { label: 'Consultas', href: '/dashboard/ventas/consultas', icon: HelpCircle, roles: ACCESO_PANTALLA.consultas },
+        ],
       },
       {
         label: 'Compras',
@@ -235,12 +284,18 @@ export const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+function filtraItem(item: NavItem, role: UserRole): NavItem | null {
+  const visible = item.roles === 'all' || (item.roles as UserRole[]).includes(role);
+  if (!visible) return null;
+  if (!item.children) return item;
+  const children = item.children.filter((hijo) => filtraItem(hijo, role) !== null);
+  return { ...item, children };
+}
+
 export function getNavForRole(role: UserRole): NavSection[] {
   return NAV_SECTIONS.map((section: NavSection) => ({
     ...section,
-    items: section.items.filter(
-      (item: NavItem) => item.roles === 'all' || (item.roles as UserRole[]).includes(role)
-    ),
+    items: section.items.map((item) => filtraItem(item, role)).filter((item): item is NavItem => item !== null),
   })).filter((section: NavSection) => section.items.length > 0);
 }
 

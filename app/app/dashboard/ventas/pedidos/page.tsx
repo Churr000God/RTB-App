@@ -1,7 +1,8 @@
 export const dynamic = 'force-dynamic';
 
-import { requireActiveUser } from '@/lib/supabase/guards';
+import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 import { PedidosExplorer } from './pedidos-explorer';
 
 const PAGE_SIZE = 20;
@@ -11,7 +12,7 @@ const PAGE_SIZE = 20;
 // /api/ventas/pedidos (antes .limit(50) sin paginación real —
 // AUDITORIA_RTB-VEN-01.md §3.2).
 export default async function PedidosPage() {
-  await requireActiveUser();
+  await requireRole(ACCESO_PANTALLA.pedidos);
   const supabase = createSupabaseServerClient();
   const { data, count } = await supabase
     .from('ventas_pedidos')

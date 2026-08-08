@@ -1,4 +1,4 @@
-import type { UserRole } from '@/types/database';
+import { TODOS_LOS_ROLES, type UserRole } from '@/types/database';
 
 export type RecursoInventario =
   | 'catalogo_unidades'
@@ -46,27 +46,27 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
   // debe ser quien opera el conteo contra ellas. Categorías y marcas sí
   // quedan con 'almacen': es quien recibe mercancía nueva y clasifica.
   catalogo_unidades: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras'],
     update: ['super_admin', 'direccion', 'compras'],
   },
   catalogo_familias: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras'],
     update: ['super_admin', 'direccion', 'compras'],
   },
   catalogo_categorias: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     update: ['super_admin', 'direccion', 'compras', 'almacen'],
   },
   catalogo_marcas: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     update: ['super_admin', 'direccion', 'compras', 'almacen'],
   },
   productos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     update: ['super_admin', 'direccion', 'compras', 'almacen'],
   },
@@ -74,7 +74,7 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
   // es_principal/activo no son "update" de esta matriz: se cambian por
   // rutas dedicadas con el cliente admin, fuera del GRANT UPDATE de columna.
   producto_imagenes: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     update: ['super_admin', 'direccion', 'compras', 'almacen'],
   },
@@ -86,7 +86,7 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
     update: ['super_admin', 'direccion', 'compras'],
   },
   producto_costos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras', 'finanzas'],
     // Sin UPDATE: una corrección de costo es una fila nueva que cierra la vigencia anterior.
   },
@@ -96,46 +96,46 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
     // Refacción"/"Costo Ariba") vivían en una tabla que el propio vendedor
     // podía editar. Mismo criterio que 015 con unidades/familias — quien
     // decide el precio no debe ser quien lo cotiza.
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras'],
     update: ['super_admin', 'direccion', 'compras'],
   },
   existencias: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     // Sin INSERT/UPDATE: sólo el trigger del kardex y la aplicación de un conteo la escriben.
   },
   apartados: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'ventas', 'almacen'],
     update: ['super_admin', 'direccion', 'ventas', 'almacen'],
   },
   movimientos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen', 'compras', 'logistica'],
     // Sin UPDATE/DELETE: kardex append-only, ni siquiera service_role lo reescribe.
   },
   conteos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen'],
     update: ['super_admin', 'direccion', 'almacen'],
   },
   conteo_detalles: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     // Update real: super_admin/direccion siempre; 'almacen' sólo en su
     // asignación activa y con el conteo en_captura (ver docstring arriba).
     update: ['super_admin', 'direccion', 'almacen'],
   },
   congelamientos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen'],
     update: ['super_admin', 'direccion', 'almacen'],
   },
   firmas: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen'],
   },
   hallazgos: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen', 'compras'],
     update: ['super_admin', 'direccion', 'almacen', 'compras'],
   },
@@ -148,12 +148,12 @@ const MATRIZ: Record<RecursoInventario, Partial<Record<Accion, UserRole[]>>> = {
     update: ['super_admin', 'direccion', 'almacen', 'compras'],
   },
   discrepancias: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'almacen', 'compras'],
     update: ['super_admin', 'direccion', 'almacen', 'compras'],
   },
   redefiniciones_unidad: {
-    select: ['super_admin', 'direccion', 'ventas', 'compras', 'finanzas', 'almacen', 'logistica', 'facturacion'],
+    select: TODOS_LOS_ROLES,
     insert: ['super_admin', 'direccion', 'compras', 'almacen'],
     // Update real: sólo el propio solicitante, y sólo mientras estado='pendiente_autorizacion'.
     update: ['super_admin', 'direccion', 'compras', 'almacen'],

@@ -4,16 +4,18 @@ import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { excepcionResolverSchema } from '@/lib/ventas/schemas';
+import { ROLES_AUTORIZAN } from '@/lib/ventas/permisos';
 import { clientIp, clientUserAgent } from '@/lib/entidades/http';
 
 // POST - resuelve una excepción de cartera. Sin GRANT UPDATE para
 // authenticated sobre cliente_excepciones (029): la resolución pasa
 // siempre por aquí, con service_role, mismo patrón que
 // /api/solicitudes-cambio/[id]/resolver — quien aprueba NUNCA puede ser
-// quien solicitó.
+// quien solicitó. ROLES_AUTORIZAN (037) es el único punto que decide quién
+// puede resolver — hoy super_admin/direccion/gerente_comercial.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
-    const { auth, response } = await requireApiRole(['super_admin', 'direccion']);
+    const { auth, response } = await requireApiRole(ROLES_AUTORIZAN);
     if (response) return response;
 
     const parsed = excepcionResolverSchema.safeParse(await request.json().catch(() => null));

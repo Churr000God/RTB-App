@@ -25,7 +25,8 @@ export function Sidebar({ role }: SidebarProps) {
   // /dashboard/inventario/conteos/[id]. Se resuelve global: entre TODOS
   // los hrefs de la navegación, gana el más específico (el más largo) que
   // calce con la ruta actual — no cada item comparando sólo consigo mismo.
-  const todosLosHrefs = sections?.flatMap((s: any) => s?.items?.map((i: any) => i?.href) ?? []) ?? [];
+  const todosLosHrefs =
+    sections?.flatMap((s: any) => s?.items?.flatMap((i: any) => [i?.href, ...(i?.children?.map((c: any) => c?.href) ?? [])]) ?? []) ?? [];
   const hrefActivo = todosLosHrefs
     .filter((href: string) => pathname === href || (href !== '/dashboard' && pathname?.startsWith?.(`${href}/`)))
     .sort((a: string, b: string) => b.length - a.length)[0];
@@ -95,6 +96,60 @@ export function Sidebar({ role }: SidebarProps) {
                           </span>
                         )}
                       </div>
+                    </li>
+                  );
+                }
+
+                // Submenú (hoy sólo "Ventas", 037): con la barra colapsada
+                // se muestra sólo el icono del padre como acceso directo al
+                // primer hijo (el tablero); expandida, el padre es un
+                // encabezado no clicable y cada hijo es su propio enlace —
+                // evita dos <Link> distintos apuntando al mismo href.
+                if (item?.children?.length) {
+                  const childHrefs = item.children.map((c: any) => c?.href);
+                  const grupoActivo = childHrefs.includes(hrefActivo);
+
+                  if (collapsed) {
+                    return (
+                      <li key={item?.href}>
+                        <Link
+                          href={item.children[0]?.href ?? item?.href ?? '#'}
+                          className={cn(
+                            'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                            grupoActivo ? 'bg-rtb-teal text-white' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                          )}
+                          title={item?.label}
+                        >
+                          {Icon && <Icon className="w-5 h-5 shrink-0" />}
+                        </Link>
+                      </li>
+                    );
+                  }
+
+                  return (
+                    <li key={item?.href}>
+                      <div className="flex items-center gap-3 px-3 py-2 text-sm font-semibold text-white/50">
+                        {Icon && <Icon className="w-5 h-5 shrink-0" />}
+                        <span>{item?.label}</span>
+                      </div>
+                      <ul className="space-y-0.5 ml-3 border-l border-white/10 pl-3">
+                        {item.children.map((hijo: any) => (
+                          <li key={hijo?.href}>
+                            <Link
+                              href={hijo?.href ?? '#'}
+                              className={cn(
+                                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                                hijo?.href === hrefActivo
+                                  ? 'bg-rtb-teal text-white'
+                                  : 'text-white/70 hover:bg-white/10 hover:text-white'
+                              )}
+                            >
+                              {hijo?.icon && <hijo.icon className="w-4 h-4 shrink-0" />}
+                              <span>{hijo?.label}</span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
                     </li>
                   );
                 }

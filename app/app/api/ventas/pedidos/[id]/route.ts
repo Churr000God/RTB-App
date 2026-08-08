@@ -3,11 +3,12 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireApiRole } from '@/lib/supabase/guards';
+import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
 
 // GET - detalle de un pedido con sus líneas (copia inmutable del snapshot).
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   try {
-    const { response } = await requireApiRole();
+    const { response } = await requireApiRole(ACCESO_PANTALLA.pedidos);
     if (response) return response;
 
     const supabase = createSupabaseServerClient();
