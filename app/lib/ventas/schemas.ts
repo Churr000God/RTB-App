@@ -5,6 +5,7 @@ import {
   CONSULTA_URGENCIAS,
   DATOS_FALTANTES,
   PRECIO_ORIGEN_VENTAS,
+  VENTAS_AUTORIZACION_TIPOS,
 } from '@/types/ventas';
 
 // Esquemas zod compartidos por las rutas de app/app/api/ventas/*. Cada
@@ -158,11 +159,12 @@ export const nrSeguimientoCreateSchema = z.object({
 });
 
 // ---------- PO del cliente (Vía B, 043/044) ----------
-// La PO ya no se da de alta a mano (poCreateSchema/poPartidaCreateSchema) ni
-// se valida por partida contra una NR (poValidarSchema/vinculoCancelarSchema)
-// — nace dentro de ventas_cotizacion_aprobar() (ver cotizacionAprobarSchema
-// arriba) y transiciona sólo por ventas_po_despachar()/
-// ventas_po_adjuntar_evidencia()/ventas_po_cancelar().
+// La PO ya no se da de alta a mano (poCreateSchema/poPartidaCreateSchema) —
+// nace dentro de ventas_cotizacion_aprobar() (ver cotizacionAprobarSchema
+// arriba, Vía B) o de ventas_po_crear_desde_nr() (Vía A, 048, ver más abajo)
+// y transiciona sólo por ventas_po_despachar()/ventas_po_adjuntar_evidencia()/
+// ventas_po_cancelar()/ventas_po_liberar_almacen()/ventas_po_ampliar()/
+// ventas_po_corregir_precio()/ventas_vinculo_cancelar().
 
 export const poDespacharSchema = z.object({
   lineas: z
@@ -181,10 +183,107 @@ export const poEvidenciaSchema = z.object({
   evidencia_path: z.string().trim().min(1, 'Falta la ruta del archivo').max(500),
 });
 
+// ---------- PO del cliente (Vía A, 048) ----------
+// Espejo del payload que consume ventas_po_agregar_partidas() (048): una
+// partida de respaldo (ya entregada por una NR) o de compromiso nueva
+// (producto de catálogo sin cotización) — usado tanto para crear la PO
+// (poDesdeNrSchema) como para ampliarla (poAmpliarSchema).
+const poRespaldoItemSchema = z.object({
+  nr_linea_id: uuidSchema,
+  cantidad: z.coerce.number().positive('La cantidad de respaldo debe ser mayor a cero'),
+  precio_unitario: z.coerce.number().nonnegative('El precio unitario debe ser mayor o igual a cero'),
+});
+
+const poCompromisoNuevaItemSchema = z.object({
+  producto_id: uuidSchema,
+  cantidad: z.coerce.number().positive('La cantidad debe ser mayor a cero'),
+  unidad_medida_id: uuidSchema,
+  precio_unitario: z.coerce.number().nonnegative('El precio unitario debe ser mayor o igual a cero'),
+  codigo_cliente: z.string().trim().max(80).optional().nullable(),
+});
+
+// Caso C del asistente: líneas de una cotización 'enviada' ya seleccionadas
+// — las NO incluidas se desactivan con nota (ventas_po_crear_desde_nr(), no
+// se borran). 'aprobacion' es el mismo payload que exige
+// ventas_cotizacion_aprobar() para el canal/evidencia de la aprobación.
+const poCompromisoCotizacionSchema = z.object({
+  cotizacion_id: uuidSchema,
+  lineas_incluidas: z.array(uuidSchema).min(1, 'Selecciona al menos una línea de la cotización'),
+  aprobacion: z.object({
+    canal: z.enum(CANAL_ORIGENES, { errorMap: () => ({ message: 'Falta el canal de la evidencia de aprobación' }) }),
+    evidencia_path: z.string().trim().max(500).optional().nullable(),
+    referencia: z.string().trim().max(500).optional().nullable(),
+    contacto_id: uuidSchema.optional().nullable(),
+    datos_faltantes: z.array(z.enum(DATOS_FALTANTES)).optional().default([]),
+  }),
+});
+
+// Registrar una PO desde el tablero de NR (requisito del dueño del
+// proyecto: no se rellena como una cotización nueva). Al menos uno de los
+// tres orígenes de partida debe venir — mismo chequeo que hace
+// ventas_po_crear_desde_nr() en SQL, replicado aquí para un mensaje legible
+// sin esperar el round-trip.
+export const poDesdeNrSchema = z
+  .object({
+    entidad_id: uuidSchema,
+    numero_po: z.string().trim().min(1, 'Falta el número de PO del cliente').max(80),
+    moneda: monedaSchema.optional().default('MXN'),
+    fecha_po: z.string().trim().optional().nullable(),
+    canal_entrega: z.enum(CANAL_ORIGENES).optional().nullable(),
+    evidencia_path: z.string().trim().max(500).optional().nullable(),
+    razon_social_declarada: z.string().trim().max(255).optional().nullable(),
+    rfc_declarado: z.string().trim().max(13).optional().nullable(),
+    subtotal_declarado: z.coerce.number().nonnegative().optional().nullable(),
+    total_declarado: z.coerce.number().nonnegative().optional().nullable(),
+    respaldo: z.array(poRespaldoItemSchema).optional().default([]),
+    compromiso_cotizacion: poCompromisoCotizacionSchema.optional().nullable(),
+    compromiso_nuevas: z.array(poCompromisoNuevaItemSchema).optional().default([]),
+  })
+  .refine(
+    (v) => v.respaldo.length > 0 || v.compromiso_nuevas.length > 0 || !!v.compromiso_cotizacion,
+    {
+      message: 'La orden de compra debe incluir al menos una partida (de respaldo, de una cotización o nueva)',
+      path: ['respaldo'],
+    }
+  );
+
+// Ampliar una PO ya creada (requisito 6 del dueño del proyecto): requiere
+// autorización — se congela hasta que Dirección la resuelva. Alcance de
+// esta entrega: sólo respaldo/compromiso_nuevas, no otra cotización.
+export const poAmpliarSchema = z.object({
+  respaldo: z.array(poRespaldoItemSchema).optional().default([]),
+  compromiso_nuevas: z.array(poCompromisoNuevaItemSchema).optional().default([]),
+  motivo: motivoSchema,
+}).refine((v) => v.respaldo.length > 0 || v.compromiso_nuevas.length > 0, {
+  message: 'La ampliación debe incluir al menos una partida nueva',
+  path: ['respaldo'],
+});
+
+// Único camino de salida cuando una autorización de precio_po_divergente
+// fue rechazada (ventas_po_corregir_precio(), 048).
+export const poCorregirPrecioSchema = z.object({
+  partidas: z
+    .array(
+      z.object({
+        po_partida_id: uuidSchema,
+        precio_unitario: z.coerce.number().nonnegative('El precio unitario debe ser mayor o igual a cero'),
+      })
+    )
+    .min(1, 'Indica al menos una partida a corregir'),
+  motivo: motivoSchema,
+});
+
+// Restaurado (existía antes de 043, dropeado con el resto de la Vía A
+// original) — ventas_vinculo_cancelar() (048).
+export const vinculoCancelarSchema = z.object({ motivo: motivoSchema });
+
 // ---------- Autorizaciones (excepciones/correcciones de Ventas) ----------
 
 export const ventasAutorizacionCreateSchema = z.object({
-  tipo: z.enum(['excepcion_subtotal', 'codigo_divergente', 'duplicidad_confirmada', 'correccion_documento']),
+  // Derivado de VENTAS_AUTORIZACION_TIPOS (types/ventas.ts) — antes era un
+  // literal hardcodeado que se desincronizó al agregar precio_po_divergente/
+  // ampliacion_po (048): la causa raíz, no un parche puntual.
+  tipo: z.enum(VENTAS_AUTORIZACION_TIPOS),
   documento_tipo: z.string().trim().min(1).max(40),
   documento_id: uuidSchema,
   motivo: motivoSchema,

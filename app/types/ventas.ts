@@ -47,10 +47,31 @@ export type NrEstado = (typeof NR_ESTADOS)[number];
 // partida de 033 (recibida/en_validacion/parcialmente_vinculada/vinculada/
 // pendiente_de_confirmacion/rechazada/corregida), retirado porque la PO ya
 // nace de datos consistentes (copiados 1:1 del pedido al aprobar).
+// pendiente_de_autorizacion/vinculada (046-048, Vía A): una PO se congela
+// completa si una partida de respaldo tiene precio distinto al de la NR que
+// cubre, o si se solicitó ampliarla — no respalda nada ni admite surtido
+// hasta que Dirección resuelva. 'vinculada' es el reposo cuando TODO lo que
+// la PO debía cubrir (respaldo con vínculo activo + compromiso surtido) ya
+// está resuelto; una PO sin ninguna partida de respaldo (todo Vía B) nunca
+// pasa de 'surtida' — no hay nada que "vincular" (ver
+// ventas_po_recalcular_estado(), 048/050).
 export const PO_ESTADOS = [
-  'abierta', 'parcialmente_surtida', 'surtida', 'facturada', 'pagada_cerrada', 'cancelada',
+  'pendiente_de_autorizacion', 'abierta', 'parcialmente_surtida', 'surtida', 'vinculada',
+  'facturada', 'pagada_cerrada', 'cancelada',
 ] as const;
 export type PoEstado = (typeof PO_ESTADOS)[number];
+
+// Origen de la PO (047): si nació dentro de ventas_cotizacion_aprobar()
+// (Vía B, 043) o desde el tablero de NR (Vía A, 048) cuando llega la PO
+// física después de una o varias NR ya emitidas.
+export const PO_ORIGENES = ['cotizacion_aprobada', 'posterior_a_entrega'] as const;
+export type PoOrigen = (typeof PO_ORIGENES)[number];
+
+// Tipo de partida (047): 'respaldo' = ya entregada por una NR (sólo Vía A,
+// nace con cantidad_entregada = cantidad); 'compromiso' = por entregar, se
+// surte contra la PO (Vía A y Vía B, default).
+export const PO_PARTIDA_TIPOS = ['compromiso', 'respaldo'] as const;
+export type PoPartidaTipo = (typeof PO_PARTIDA_TIPOS)[number];
 
 export const VINCULO_ESTADOS = [
   'pendiente', 'validado', 'rechazado_por_precio', 'rechazado_por_cantidad',
@@ -58,8 +79,13 @@ export const VINCULO_ESTADOS = [
 ] as const;
 export type VinculoEstado = (typeof VINCULO_ESTADOS)[number];
 
+// precio_po_divergente/ampliacion_po (046-048, Vía A): los dos motivos de
+// congelamiento de una PO — precio de una partida de respaldo distinto al
+// de su línea de NR, o solicitud de agregar más NR/partidas a una PO ya
+// creada. Documento polimórfico: documento_tipo='orden_compra_cliente'.
 export const VENTAS_AUTORIZACION_TIPOS = [
   'excepcion_subtotal', 'codigo_divergente', 'duplicidad_confirmada', 'correccion_documento',
+  'precio_po_divergente', 'ampliacion_po',
 ] as const;
 export type VentasAutorizacionTipo = (typeof VENTAS_AUTORIZACION_TIPOS)[number];
 
@@ -299,6 +325,9 @@ export interface DevolucionRow {
   entidades?: { nombre_comercial: string | null; nombre_legal: string } | null;
 }
 
+/** @deprecated Sustituida por NrListadoRow / ventas_notas_remision_listado
+ *  (049) — ventas_tablero_nr() se retira una vez migrados sus 3
+ *  consumidores. Se conserva el tipo mientras dure esa migración. */
 export interface TableroNrRow {
   nr_id: string;
   folio: string;
@@ -317,6 +346,64 @@ export interface TableroNrRow {
   nota_ultimo_contacto: string | null;
 }
 
+/** Fila de public.ventas_notas_remision_listado (049) — mismo patrón que
+ *  CotizacionListadoRow (038): aplana cliente/pedido/cotización y agrega
+ *  totales de línea + cobertura por PO (excluyendo vínculos de una PO
+ *  congelada, 048 — ver monto_pendiente_po). */
+export interface NrListadoRow {
+  id: string;
+  folio: string;
+  pedido_id: string | null;
+  entidad_id: string;
+  entidad_clave: string | null;
+  entidad_siglas: string | null;
+  entidad_nombre_legal: string | null;
+  entidad_nombre_comercial: string | null;
+  vendedor_id: string | null;
+  moneda: string;
+  estado: NrEstado;
+  emitida_at: string;
+  entregada_at: string | null;
+  valor_total: number | null;
+  ultimo_contacto_at: string | null;
+  nota_ultimo_contacto: string | null;
+  cancelado_at: string | null;
+  motivo_cancelacion: string | null;
+  created_at: string;
+  updated_at: string;
+  pedido_folio: string | null;
+  pedido_estado: PedidoEstado | null;
+  cotizacion_id: string | null;
+  cotizacion_folio: string | null;
+  /** Sale del pedido/cotización — la NR no tiene esta columna. */
+  canal_origen: CanalOrigen | null;
+  antiguedad_dias: number;
+  lineas_count: number;
+  cantidad_total: number;
+  cantidad_entregada_total: number;
+  monto_entregado: number;
+  /** Ya excluye vínculos de una PO pendiente_de_autorizacion (048). */
+  monto_respaldado: number;
+  monto_pendiente_po: number;
+  po_folios: string | null;
+}
+
+export const NR_FECHA_CAMPOS = ['emision', 'entrega', 'creacion', 'ultimo_contacto'] as const;
+export type NrFechaCampo = (typeof NR_FECHA_CAMPOS)[number];
+
+export const NR_ORDENES = [
+  'reciente', 'antigua', 'antiguedad_desc', 'monto_desc', 'monto_asc', 'pendiente_desc',
+] as const;
+export type NrOrden = (typeof NR_ORDENES)[number];
+
+/** Una columna del tablero de NR — count real (no data.length, acotado por
+ *  el tope de tarjetas). */
+export interface NrTableroColumna {
+  estado: NrEstado;
+  count: number;
+  data: NrListadoRow[];
+}
+
 export interface OrdenCompraClienteRow {
   id: string;
   folio: string;
@@ -324,8 +411,12 @@ export interface OrdenCompraClienteRow {
   entidad_id: string;
   pedido_id: string | null;
   /** Cotización que la aprobó como PO (043) — null en las PO relic de
-   *  Vía A, previas a este cambio. */
+   *  Vía A, previas a este cambio, y en una PO de Vía A puramente de
+   *  respaldo/partidas nuevas (sin caso C). */
   cotizacion_id: string | null;
+  /** origen (047): 'cotizacion_aprobada' (Vía B) | 'posterior_a_entrega'
+   *  (Vía A, desde el tablero de NR). */
+  origen: PoOrigen;
   moneda: string;
   subtotal_declarado: number | null;
   total_declarado: number | null;
@@ -362,6 +453,9 @@ export interface PoPartidaRow {
   unidad_medida_id: string | null;
   cantidad_entregada: number;
   codigo_divergente: boolean;
+  /** tipo (047): 'respaldo' = ya entregada por una NR (Vía A, cantidad_entregada
+   *  nace igual a cantidad); 'compromiso' = por entregar, se surte contra la PO. */
+  tipo: PoPartidaTipo;
   /** Embed PostgREST `productos(codigo_interno, nombre)`. */
   productos?: ProductoResumen | null;
 }
@@ -403,6 +497,39 @@ export interface OrdenCompraListadoRow {
   total: number;
   cantidad_total: number;
   cantidad_entregada_total: number;
+  /** origen/respaldo/compromiso/nr_folios/diferencia_precio_total/
+   *  autorizacion_pendiente_id (047) — columnas añadidas al final de la
+   *  vista, create or replace view no permite reordenar. */
+  origen: PoOrigen;
+  respaldo_partidas: number;
+  compromiso_partidas: number;
+  /** Folios de NR que esta PO respalda (join vía vínculos activos), null si
+   *  no tiene ninguna partida de respaldo. */
+  nr_folios: string | null;
+  /** Σ cantidad_cubierta·(precio_po - precio_nr) de sus vínculos activos —
+   *  0 si no hay divergencia. Sólo informativo, la congelación real la
+   *  decide el backend al crear/corregir la PO. */
+  diferencia_precio_total: number;
+  /** id de la autorización pendiente más reciente (precio_po_divergente/
+   *  ampliacion_po) sobre esta PO, null si no hay ninguna. */
+  autorizacion_pendiente_id: string | null;
+}
+
+/** Fila de public.ventas_nr_lineas_disponibles() (048) — requisito 3 hecho
+ *  consulta: una línea de NR cubierta del todo (disponible <= 0) no
+ *  aparece. Alimenta el paso 2 del asistente "Registrar PO" (Vía A). */
+export interface NrLineaDisponibleRow {
+  nr_id: string;
+  nr_folio: string;
+  nr_linea_id: string;
+  producto_id: string;
+  producto_codigo: string;
+  producto_nombre: string;
+  unidad_medida_id: string;
+  cantidad_entregada: number;
+  cantidad_asociada: number;
+  disponible: number;
+  precio_unitario: number;
 }
 
 /** Campo de fecha que puede elegir el selector de rango del listado de PO —

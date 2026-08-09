@@ -13,11 +13,15 @@ import {
   type DatoFaltante,
   type DevolucionEstado,
   type NrEstado,
+  type NrFechaCampo,
+  type NrOrden,
   type PedidoEstado,
   type PedidoVia,
   type PoEstado,
   type PoFechaCampo,
   type PoOrden,
+  type PoOrigen,
+  type PoPartidaTipo,
   type PrecioOrigenVenta,
   type VentasAutorizacionEstado,
   type VentasAutorizacionTipo,
@@ -173,23 +177,62 @@ export const NR_ESTADO_TONO: Record<NrEstado, Tono> = {
   con_incidencia: 'bloqueado',
 };
 
-// Ciclo de surtido de la Vía B (043) — ver types/ventas.ts PO_ESTADOS.
+/** Selector de campo del filtro de rango de fechas del explorer de NR (049)
+ *  — mismo patrón que COTIZACION_FECHA_CAMPO_LABELS. */
+export const NR_FECHA_CAMPO_LABELS: Record<NrFechaCampo, string> = {
+  emision: 'Fecha de emisión',
+  entrega: 'Fecha de entrega',
+  creacion: 'Fecha de creación',
+  ultimo_contacto: 'Último contacto',
+};
+
+export const NR_ORDEN_LABELS: Record<NrOrden, string> = {
+  reciente: 'Más recientes primero',
+  antigua: 'Más antiguas primero',
+  antiguedad_desc: 'Mayor antigüedad primero',
+  monto_desc: 'Mayor monto primero',
+  monto_asc: 'Menor monto primero',
+  pendiente_desc: 'Mayor pendiente de PO primero',
+};
+
+/** Tarjetas por columna del tablero de NR antes de mostrar "+N más — ver en
+ *  la tabla" — mismo criterio que COTIZACION_TABLERO_TOPE. */
+export const NR_TABLERO_TOPE = 40;
+
+// Ciclo de surtido de la Vía B (043) + los 2 estados de congelamiento/reposo
+// de la Vía A (046-048) — ver types/ventas.ts PO_ESTADOS.
 export const PO_ESTADO_LABELS: Record<PoEstado, string> = {
+  pendiente_de_autorizacion: 'Pendiente de autorización',
   abierta: 'Abierta',
   parcialmente_surtida: 'Parcialmente surtida',
   surtida: 'Surtida',
+  vinculada: 'Vinculada',
   facturada: 'Facturada',
   pagada_cerrada: 'Pagada / cerrada',
   cancelada: 'Cancelada',
 };
 
 export const PO_ESTADO_TONO: Record<PoEstado, Tono> = {
+  pendiente_de_autorizacion: 'bloqueado',
   abierta: 'pendiente',
   parcialmente_surtida: 'pendiente',
   surtida: 'activo',
+  vinculada: 'activo',
   facturada: 'activo',
   pagada_cerrada: 'inactivo',
   cancelada: 'inactivo',
+};
+
+// Origen de la PO (047) — ver types/ventas.ts PO_ORIGENES.
+export const PO_ORIGEN_LABELS: Record<PoOrigen, string> = {
+  cotizacion_aprobada: 'Cotización aprobada como PO',
+  posterior_a_entrega: 'Registrada tras una entrega',
+};
+
+// Tipo de partida (047) — ver types/ventas.ts PO_PARTIDA_TIPOS.
+export const PO_PARTIDA_TIPO_LABELS: Record<PoPartidaTipo, string> = {
+  compromiso: 'Por entregar',
+  respaldo: 'Ya entregada',
 };
 
 /** Selector de campo del filtro de rango de fechas del listado de PO —
@@ -228,6 +271,8 @@ export const VENTAS_AUTORIZACION_TIPO_LABELS: Record<VentasAutorizacionTipo, str
   codigo_divergente: 'Código de producto divergente',
   duplicidad_confirmada: 'Duplicidad confirmada',
   correccion_documento: 'Corrección de documento',
+  precio_po_divergente: 'Precio de PO distinto al de la NR',
+  ampliacion_po: 'Ampliación de PO',
 };
 
 export const VENTAS_AUTORIZACION_ESTADO_LABELS: Record<VentasAutorizacionEstado, string> = {

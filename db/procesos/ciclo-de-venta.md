@@ -338,21 +338,31 @@ sigue siendo cierto, es lo que espera la Vía A cuando se reconstruya.
 
 - **Vía B cerrada 2026-08-08 (043/044)** — ya no está pendiente: la PO
   nace al aprobar y se despacha con `ventas_po_despachar()`, ver §3/§5/§6.
-- **Vía A (PO que llega DESPUÉS de una NR) — pendiente, para otra
-  sesión.** Al retirar la validación por partida (§6), no hay ningún
-  camino para registrar una PO que el cliente manda después de que ya se
-  remisionó por Vía A. `ventas_po_nr_vinculos`, el enum `vinculo_estado`
-  y sus 2 *constraint triggers* diferidos se conservan en el esquema,
-  inertes (sin GRANT de escritura), listos para cuando se reconstruya —
-  ver el bloque `<details>` de §6.
-- **Permisos de PO entre vendedores — la pregunta original ya no aplica a
-  la Vía B, pero resurge tal cual con la Vía A.** `030:165-168` discutía
-  si una PO consolidada podía involucrar NR de otro vendedor del mismo
-  cliente — irrelevante en Vía B (la PO nace del pedido del propio
-  vendedor que aprobó). Si la reconstrucción de la Vía A reintroduce algo
-  como `ventas_po_validar()`, repreguntar entonces si `vendedor_id` debe
-  filtrar qué NR puede cubrir cada usuario `ventas` (ver
+- **Vía A cerrada 2026-08-08 (046-051, sesión concurrente con la de
+  arriba)** — ya no está pendiente: desde el tablero de NR se registra la
+  PO que llega DESPUÉS de una o varias NR ya emitidas, con partidas de
+  respaldo (ya entregadas, usando `ventas_po_nr_vinculos` y sus 2
+  *constraint triggers* diferidos, que sí se reutilizaron) y por entregar
+  (de una cotización existente o nuevas del catálogo, surtidas contra la
+  PO igual que la Vía B). No se restauró `ventas_po_validar()` — el
+  bloqueo por precio distinto congela la PO completa vía
+  `ventas_autorizaciones.precio_po_divergente`, no el cruce de
+  moneda/RFC/costo/código/duplicidad que describe el `<details>` de §6.
+  Detalle completo en `CLAUDE.md` → Historial (2026-08-08, Vía A).
+- **Permisos de PO entre vendedores — sigue sin resolverse, ahora aplica a
+  ambas vías.** `030:165-168` discutía si una PO consolidada podía
+  involucrar NR de otro vendedor del mismo cliente. La Vía A nueva no
+  filtra por `vendedor_id` al elegir qué NR respaldar (asume que sí puede,
+  consistente con esa nota) — sigue siendo una decisión pendiente de
+  confirmar con el dueño del proyecto, no tomada por suposición (ver
   `contexto/AUDITORIA_RTB-VEN-01.md` §3.6 y TODO de `CLAUDE.md`).
+- **Vía A — alcance dejado fuera de la entrega de 046-051**:
+  `ventas_po_devolver()` (una PO puramente de partidas nuevas puede abrir
+  devolución por esquema pero no hay función que la abra), ampliar una PO
+  con líneas de otra cotización (`ventas_po_ampliar()` sólo admite
+  respaldo/partidas nuevas), y los tipos de autorización de la Vía A
+  original (`excepcion_subtotal`/`codigo_divergente`/
+  `duplicidad_confirmada`) siguen sin productor.
 - **`ventas_po_cancelar()` sin botón en la UI** — existe (`044`) pero la
   cancelación de negocio real sigue siendo "Cancelar cotización" (§3b),
   que también cancela la PO en su rama sin entrega.

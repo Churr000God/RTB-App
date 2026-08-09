@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { notFound } from 'next/navigation';
 import { requireRole } from '@/lib/supabase/guards';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
+import { ACCESO_PANTALLA, ROLES_REGISTRAN_PO } from '@/lib/ventas/permisos';
 import { NrDetalle } from './nr-detalle';
 
 export default async function NrDetallePage({ params }: { params: { id: string } }) {
@@ -30,6 +30,7 @@ export default async function NrDetallePage({ params }: { params: { id: string }
       seguimientos={seguimientos ?? []}
       cobertura={cobertura ?? null}
       rol={auth.profile.role}
+      puedeRegistrarPo={ROLES_REGISTRAN_PO.includes(auth.profile.role)}
     />
   );
 }

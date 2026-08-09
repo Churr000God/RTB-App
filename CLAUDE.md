@@ -78,7 +78,7 @@ de RTB-PRO-FAC-01)
 | 1 | Autenticación y Permisos | ✅ Base funcional (auditado 2026-08-04) |
 | 2 | RTB-ENT-01 Gestión de Entidades (clientes/proveedores/ubicaciones) | ✅ Base funcional (auditado 2026-08-05) |
 | 3 | RTB-INV-01 Productos, Costos e Inventario (catálogo, kardex, conteos, discrepancias, ajustes) | ✅ Base funcional (auditado 2026-08-05) |
-| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO nace al aprobar) | ✅ Base funcional (auditado 2026-08-07, hallazgo crítico y defectos de UX corregidos el mismo día) — Vía B cerrada 2026-08-08 (043/044); Vía A (PO tardía) pendiente |
+| 4 | RTB-VEN-01 Ventas (cotización, Compras-ligero, NR/despacho, PO por Vía B o Vía A) | ✅ Base funcional (auditado 2026-08-07, hallazgo crítico y defectos de UX corregidos el mismo día) — Vía B cerrada 2026-08-08 (043/044); Vía A (PO tardía, tablero de NR) cerrada 2026-08-08 (046-051) |
 | 5 | Compras | 🔜 Planificado |
 | 6 | Almacén | 🔜 Planificado |
 | 7 | Rutas | 🔜 Planificado |
@@ -464,6 +464,26 @@ contra Supabase — ver TODO.
   solo. Regla general: añadir una FK compuesta nueva entre dos tablas que
   ya tenían una FK simple obliga a revisar cada embed implícito existente
   entre ellas, en ambos sentidos.
+- **Una condición "count = 0 en un conjunto opcional" es una verdad vacía
+  cuando ese conjunto simplemente no existe — no confundir "nada
+  pendiente" con "nunca hubo nada que hacer".** `ventas_po_recalcular_estado()`
+  (048, Vía A) promovía una PO a `'vinculada'` en cuanto
+  `compromiso_pendientes = 0 and respaldo_pendiente = 0` — pero una PO sin
+  **ninguna** partida de respaldo (todo Vía B, o Vía A puramente de
+  compromiso) también cumple `respaldo_pendiente = 0` por conteo vacío,
+  así que **toda** PO de Vía B llegaba a `'vinculada'` en cuanto terminaba
+  de surtirse, saltándose `'surtida'` — el estado que su propia UI/KPI
+  siempre había usado como terminal. Encontrado en la verificación clic a
+  clic de esta misma entrega (escenario mixto caso C + caso N, sin
+  respaldo), no por la matriz de SQL previa (que sí probó una PO con
+  respaldo, donde el comportamiento es correcto). Corregido añadiendo
+  `exists(select 1 from ... where tipo='respaldo')` como condición
+  explícita adicional (`050_ventas_po_vinculada_fix.sql`) — `'vinculada'`
+  sólo aplica si hubo algo que vincular. Regla general: antes de tratar
+  "count(*) sobre una condición = 0" como "ya se cumplió", comprobar por
+  separado si el conjunto que cuenta pudo estar vacío por diseño, no sólo
+  por progreso — un `exists()` aparte, no el mismo `count`, es lo único
+  que distingue los dos casos.
 
 ## Historial de decisiones
 
@@ -1544,6 +1564,101 @@ contra Supabase — ver TODO.
   que produce este desalineamiento; cada acción necesita su propia
   constante aunque hoy coincida con otra.
 
+- **2026-08-08 (sesión aparte, concurrente con las de arriba) — Vía A de
+  RTB-VEN-01: registrar desde el tablero de NR la PO que llega DESPUÉS de
+  una o varias NR ya emitidas.** Pedido del dueño del proyecto mientras
+  otra sesión cerraba la Vía B en el mismo repositorio (043-045) — la Vía
+  B invertía el flujo entero (la PO nace *al aprobar* la cotización); esta
+  sesión cubre el caso complementario: el cliente ya recibió su mercancía
+  por NR y su PO física llega después. La cotización sigue convirtiéndose
+  en NR exactamente igual que siempre — sin cambios ahí. El registro no se
+  rellena como una cotización nueva: pide los datos de la PO y del
+  cliente, y dentro de un mismo asistente de 4 pasos deja seleccionar
+  partidas de **respaldo** (líneas de una o varias NR ya entregadas) y
+  partidas **por entregar**, estas últimas de dos orígenes — de una
+  cotización `enviada` existente (las líneas no elegidas se desactivan
+  con nota, nunca se borran, y la cotización se aprueba sólo por lo
+  seleccionado) o nuevas del catálogo sin cotización de por medio. Toda
+  partida por entregar se surte después contra la PO, con kardex real —
+  unifica el modelo con la PO de Vía B en vez de construir un segundo
+  sistema de despacho paralelo.
+
+  Seis migraciones (`046_ventas_po_via_a_enums.sql` … `051_ventas_tablero_
+  nr_drop.sql`), diseñadas y verificadas contra el estado **vivo** de
+  Supabase después de que la Vía B ya hubiera aplicado 043/044/045 — no
+  contra el texto de esas migraciones. La sesión encontró y resolvió tres
+  problemas reales antes de escribir una sola línea de SQL: (1) la FK
+  compuesta nueva de 043 (`ventas_po_partidas_po_pedido_fkey`) obliga a
+  que toda partida comparta el `pedido_id` de su PO — imposible para una
+  PO de Vía A que respalda NR de **pedidos distintos**; se dropeó y se
+  sustituyó por un trigger (`po_partida_coherencia_pedido()`) que
+  preserva la garantía real de Vía B sin bloquear el caso multi-pedido.
+  (2) `ventas_pedidos.cotizacion_id` es NOT NULL, así que una partida
+  nueva sin cotización (caso N) no podía tener pedido ni apartado por la
+  vía existente — se evaluaron y descartaron inyectarla en la cotización
+  del caso C (reescribiría un documento ya enviado por correo, 042),
+  relajar `cotizacion_id` (`ventas_tablero_nr()` y varias funciones lo
+  asumen con `INNER JOIN`) y una cotización de respaldo autogenerada
+  (ensucia el explorer de Cotizaciones); se adoptó
+  `inventario_apartados.po_partida_id` como origen de apartado de primera
+  clase, igual que ya lo es `pedido_linea_id` desde `035` — barato porque
+  ambas columnas de pedido del apartado ya eran nullable y
+  `ventas_po_despachar()` nunca usó el pedido para el movimiento de
+  kardex. Consecuencia aceptada: `ventas_devoluciones.cotizacion_id` se
+  relajó a nullable (`dev_origen_chk` exige al menos `cotizacion_id` o
+  `po_id`) — una PO de Vía A puramente de partidas nuevas no tiene
+  cotización que la respalde. (3) El requisito de "cambio de precio
+  congela la PO completa" exigía reescribir `ventas_cotizacion_aprobar()`
+  (función de la otra sesión, activa en el mismo repositorio) para que,
+  si recibe un `po_id` existente (caso C), agregue líneas a esa PO en vez
+  de crear una nueva — decisión explícita del dueño del proyecto de
+  editar la función compartida (un `if` aditivo de ~15 líneas) en vez de
+  duplicar su lógica de apartados/conversión de unidad; riesgo de
+  colisión con la sesión concurrente aceptado a cambio de no mantener
+  kardex en dos sitios. `git diff` de los 12 archivos compartidos
+  confirmado sin pérdida de cambios de la otra sesión al cerrar.
+
+  Dos estados nuevos de `po_estado` (`pendiente_de_autorizacion`,
+  `vinculada`) — deliberadamente no se agregó un tercer
+  `parcialmente_vinculada`: habría sido redundante con
+  `abierta`/`parcialmente_surtida` y reproducido el defecto histórico del
+  `ventas_po_validar()` original (033) de escalar comparando agregados en
+  vez de contar partidas. Dos tipos nuevos de `ventas_autorizacion_tipo`
+  (`precio_po_divergente`, `ampliacion_po`); de paso se corrigió la causa
+  raíz de que el `z.enum([...])` de `ventasAutorizacionCreateSchema`
+  estuviera hardcodeado en vez de derivarse de `VENTAS_AUTORIZACION_TIPOS`
+  — ya se había desincronizado una vez. `ventas_po_despachar()` se
+  generalizó (no se bifurcó): perdió la exigencia de un único `pedido_id`,
+  rechaza partidas de respaldo y PO congeladas, resuelve el apartado por
+  `pedido_linea_id` o `po_partida_id` según cuál tenga la partida, y
+  recalcula todos los pedidos que toque, no uno solo. `ventas_vinculo_
+  cancelar()` se restauró (existía antes de 043, dropeada con el resto de
+  la Vía A original) recalculando con los helpers nuevos en vez del
+  `CASE` inline que sólo avanzaba.
+
+  La verificación SQL (12 escenarios con rol real simulado, `BEGIN`/
+  `ROLLBACK`) encontró un bug real antes de que hubiera datos en riesgo —
+  ver Gotchas ("verdad vacía" de `ventas_po_recalcular_estado()`),
+  corregido en `050`. `get_advisors` sin `ERROR` nuevo, `npx tsc --noEmit`
+  y `docker build --target builder` (TypeScript real) limpios. Clic a
+  clic real con `qa.ventas` (no la cuenta del dueño del proyecto): NR con
+  cobertura real en las 5 tarjetas del detalle (antes fijas en $0),
+  asistente completo con datos reales (línea de NR con disponible
+  correcto, cotización `enviada` del cliente cargada), registro exitoso
+  de `POC-000041` (`origen=posterior_a_entrega`), NR permaneciendo
+  correctamente en `parcialmente_entregada` (tiene una segunda línea sin
+  entregar — no es un bug, es el mismo criterio que ya usaba el sistema
+  original: los estados de respaldo sólo aplican cuando la entrega está
+  completa), detalle de la PO con partidas de respaldo, comparación de
+  precio contra la NR y botón de cancelar vínculo, y el tablero de PO
+  mostrando la fila nueva en la columna "Vinculada" junto a las PO de Vía
+  B de la otra sesión sin interferencia. Encontrado en el mismo recorrido
+  y corregido de inmediato: `EntidadCombobox` no tiene forma de mostrar
+  un cliente preseleccionado por URL (`entidadId` sí quedaba bien puesto,
+  sólo la etiqueta visual se veía vacía) — se resolvió pasando el nombre
+  ya resuelto por query string (`entidad_label`) desde el botón "Registrar
+  PO" del detalle de NR, sin fetch adicional en el cliente.
+
 ## TODO
 
 - **MailerSend sin webhook.** `ventas_cotizacion_envios.resultado='exitoso'`
@@ -1584,25 +1699,32 @@ contra Supabase — ver TODO.
   en memoria que ya funciona sin resolver ningún problema de escala real.
   Revisar sólo si el criterio de acceso cambiara (p.ej. autoservicio de
   cuentas para terceros).
-- **RTB-VEN-01 — Vía B cerrada (2026-08-08, migraciones 043/044); Vía A
-  (PO que llega DESPUÉS de una NR) queda pendiente, deliberadamente fuera
-  de esa entrega.** La PO ya nace dentro de
-  `ventas_cotizacion_aprobar()` cuando `via='orden_compra'`, con sus
-  partidas copiadas 1:1 del pedido, y se despacha directo al kardex con
-  `ventas_po_despachar()` (espejo de `ventas_nr_despachar()`) — ver
-  Historial. Lo que falta: cuando el cliente aprueba **sin** PO (se
-  remisiona por Vía A) y su PO llega semanas después, hoy no hay dónde
-  registrarla — el alta manual de PO se retiró junto con
-  `ventas_po_validar()`/`ventas_vinculo_cancelar()` y la maquinaria de
-  vínculos PO↔NR por partida. Las tablas (`ventas_po_nr_vinculos`, enum
-  `vinculo_estado`, sus 2 constraint triggers diferidos) y la bandeja de
-  Autorizaciones/`ventas_autorizacion_resolver()` se conservaron intactas
-  a propósito para esto — quedan inertes (sin GRANT de escritura) hasta
-  que se reconstruya. Consecuencia visible mientras tanto:
-  `ventas_nr_cobertura()` devuelve 0 de respaldo para toda NR nueva,
-  `nr_estado.parcialmente_respaldada`/`po_vinculada` quedan sin escritor,
-  y la bandeja de Autorizaciones no recibe solicitudes nuevas de PO
-  (excepción de subtotal/duplicidad).
+- **RTB-VEN-01 — Vía A construida (2026-08-08, migraciones 046-051, ver
+  Historial) — cierra el TODO que dejó abierto la entrega de Vía B
+  (043/044).** Registrar desde el tablero de NR la PO que llega DESPUÉS
+  de una o varias NR ya emitidas. `ventas_nr_cobertura()` ya no devuelve
+  0 fijo, `nr_estado.parcialmente_respaldada`/`po_vinculada` sí tienen
+  escritor, y la bandeja de Autorizaciones recibe `precio_po_divergente`/
+  `ampliacion_po` (los tipos de Vía A; `excepcion_subtotal`/
+  `codigo_divergente`/`duplicidad_confirmada` — los de la Vía A original,
+  033 — siguen sin productor, ver más abajo). Alcance dejado fuera de
+  esta entrega:
+  - `ventas_po_devolver()` — una PO de Vía A compuesta sólo de partidas
+    nuevas (caso N, sin cotización) puede abrir devolución por esquema
+    (`ventas_devoluciones.po_id`/`cotizacion_id` nullable, `dev_origen_chk`
+    exige al menos uno) pero no hay ninguna función que la abra; hoy sólo
+    nace desde `ventas_cotizacion_cancelar()`.
+  - `ventas_po_ampliar()` sólo admite `respaldo`/`compromiso_nuevas` en su
+    payload — ampliar con líneas de OTRA cotización (además de la que ya
+    tiene la PO, si la tiene) no está soportado ni en SQL ni en la UI.
+  - Cierre de una PO tras resolver su devolución: no construido (mismo
+    TODO que ya tenía Vía B).
+  - `excepcion_subtotal`/`codigo_divergente`/`duplicidad_confirmada`
+    (tipos de la Vía A **original**, 033) siguen sin ningún productor —
+    esa maquinaria de validación por partida (`ventas_po_validar()`) fue
+    la que 043 retiró; esta entrega construyó un modelo distinto
+    (respaldo/compromiso con congelamiento de PO completa por precio
+    divergente), no la resucitó.
 - **RTB-VEN-01 — reloj de cobranza y CFDI son RTB-PRO-FAC-01, módulo
   futuro.** `clientes.tipo_cliente` (029) ya guarda la configuración por
   cliente y `nr_estado`/`po_estado` (032/043) ya incluyen

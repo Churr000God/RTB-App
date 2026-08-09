@@ -49,9 +49,10 @@ type Accion = 'select' | 'insert' | 'update' | 'delete';
  *    'ventas' — abrirla es consecuencia de cancelar, cerrarla es un acto
  *    gerencial).
  *  - 'ordenes_compra'/'po_partidas': SIN GRANT INSERT/UPDATE para ningún rol
- *    desde 043 — la PO nace únicamente dentro de
- *    ventas_cotizacion_aprobar() (Vía B), nunca de un alta manual. 'insert'
- *    desapareció de ambos recursos a propósito, no es un olvido.
+ *    desde 043 — la PO nace dentro de ventas_cotizacion_aprobar() (Vía B) o
+ *    de ventas_po_crear_desde_nr() (Vía A, 048, ver ROLES_REGISTRAN_PO más
+ *    abajo), nunca de un alta manual por GRANT. 'insert' desapareció de
+ *    ambos recursos a propósito, no es un olvido.
  */
 const MATRIZ: Record<RecursoVentas, Partial<Record<Accion, UserRole[]>>> = {
   cotizaciones: {
@@ -221,3 +222,22 @@ export const ROLES_ADJUNTAN_EVIDENCIA_PO: UserRole[] = ['super_admin', 'direccio
  *  ventas_consulta_responder() (030). 'ventas' NUNCA está aquí: levanta la
  *  consulta pero no la resuelve. */
 export const ROLES_RESPONDEN_CONSULTA: UserRole[] = ['super_admin', 'direccion', 'compras'];
+
+/** Roles que pueden registrar una PO desde el tablero de NR (Vía A) —
+ *  espejo de ventas_po_crear_desde_nr()/ventas_po_ampliar()/
+ *  ventas_po_corregir_precio() (048). Mismo conjunto que aprueba una
+ *  cotización (ventas_cotizacion_aprobar()) porque ventas_po_crear_desde_nr()
+ *  delega en ella para el caso C — coincide hoy con
+ *  ROLES_ADJUNTAN_EVIDENCIA_PO, constante separada a propósito (mismo
+ *  criterio que ROLES_LIBERAN_ALMACEN/ROLES_DESPACHAN): son preocupaciones
+ *  distintas que sólo comparten valor por ahora. */
+export const ROLES_REGISTRAN_PO: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial', 'ventas'];
+
+/** Roles que pueden cancelar una PO o un vínculo PO↔NR — espejo de
+ *  ventas_po_cancelar() (sólo autoridad gerencial, sin 'ventas') y de
+ *  ventas_vinculo_cancelar() (048, restaurada — mismo conjunto que
+ *  ROLES_REGISTRAN_PO). Se exponen separadas porque sus guards SQL
+ *  difieren: cancelar la PO completa es más estrecho que cancelar un
+ *  vínculo suyo. */
+export const ROLES_CANCELAN_PO: UserRole[] = ['super_admin', 'direccion', 'gerente_comercial'];
+export const ROLES_CANCELAN_VINCULO: UserRole[] = ROLES_REGISTRAN_PO;

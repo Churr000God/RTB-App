@@ -6,24 +6,26 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { NREstadoBadge } from '@/components/ventas/estado-badge';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
 import { ACCESO_PANTALLA } from '@/lib/ventas/permisos';
-import type { TableroNrRow } from '@/types/ventas';
+import { NOTAS_REMISION_VISTA } from '@/lib/ventas/listado-notas-remision';
+import type { NrListadoRow } from '@/types/ventas';
 import { ShoppingCart } from 'lucide-react';
 
-// Tablero de RTB-VEN-01: KPIs (ventas_kpis, 034) + el tablero de
-// seguimiento de NR (ventas_tablero_nr, 034). "entregada_sin_po" es el
-// estado de máxima vigilancia (RTB-PRO-VEN-01 §III) — hay valor entregado
-// sin factura — y se resalta con el borde dorado, mismo idioma visual que
-// "pendientes de autorización" en /dashboard/inventario/ajustes.
+// Tablero de RTB-VEN-01: KPIs (ventas_kpis, 034) + las 15 NR más recientes
+// (ventas_notas_remision_listado, 049 — sustituye a ventas_tablero_nr()).
+// "entregada_sin_po" es el estado de máxima vigilancia (RTB-PRO-VEN-01
+// §III) — hay valor entregado sin factura — y se resalta con el borde
+// dorado, mismo idioma visual que "pendientes de autorización" en
+// /dashboard/inventario/ajustes.
 export default async function VentasDashboardPage() {
   const auth = await requireRole(ACCESO_PANTALLA.tablero);
   const supabase = createSupabaseServerClient();
 
   const [{ data: kpis }, { data: tablero }] = await Promise.all([
     supabase.rpc('ventas_kpis'),
-    supabase.rpc('ventas_tablero_nr', { p_limit: 15, p_offset: 0 }),
+    supabase.from(NOTAS_REMISION_VISTA).select('*').order('emitida_at', { ascending: false }).limit(15),
   ]);
 
-  const filas = (tablero ?? []) as TableroNrRow[];
+  const filas = (tablero ?? []) as NrListadoRow[];
 
   // Cada tarjeta enlaza a su listado ya filtrado — antes eran <div> inertes
   // sin destino (BUG-NAV-01: un super_admin leía "Cotizaciones en
@@ -148,20 +150,20 @@ export default async function VentasDashboardPage() {
           <tbody>
             {filas.map((f, i) => (
               <tr
-                key={f.nr_id}
+                key={f.id}
                 className={`border-b border-border/50 ${f.estado === 'entregada_sin_po' ? 'border-l-4 border-l-rtb-gold' : i % 2 === 1 ? 'bg-rtb-surface/40' : ''}`}
               >
                 <td className="py-3 px-4">
-                  <Link href={`/dashboard/ventas/remisiones/${f.nr_id}`} className="text-xs tabular-nums text-rtb-teal hover:underline">
+                  <Link href={`/dashboard/ventas/remisiones/${f.id}`} className="text-xs tabular-nums text-rtb-teal hover:underline">
                     {f.folio}
                   </Link>
                 </td>
-                <td className="py-3 px-4 text-sm">{f.entidad_nombre ?? '—'}</td>
+                <td className="py-3 px-4 text-sm">{f.entidad_nombre_comercial ?? f.entidad_nombre_legal ?? '—'}</td>
                 <td className="py-3 px-4">
                   <NREstadoBadge estado={f.estado} />
                 </td>
                 <td className="py-3 px-4 text-right tabular-nums text-sm">{f.antiguedad_dias} días</td>
-                <td className="py-3 px-4 text-right tabular-nums text-sm">{formatearMoneda(f.monto_pendiente)}</td>
+                <td className="py-3 px-4 text-right tabular-nums text-sm">{formatearMoneda(f.monto_pendiente_po)}</td>
                 <td className="py-3 px-4 text-sm text-muted-foreground">{f.po_folios ?? '—'}</td>
               </tr>
             ))}

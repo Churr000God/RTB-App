@@ -83,9 +83,11 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `pedido_via` | `nota_remision`, `orden_compra` (`043`) | `ventas_pedidos.via` |
 | `apartado_nivel` | `reserva`, `compromiso` | `inventario_apartados` |
 | `nr_estado` | `abierta`, `en_preparacion`, `parcialmente_entregada`, `entregada_sin_po`, `parcialmente_respaldada`, `po_vinculada`, `facturada`, `pagada_cerrada`, `cancelada`, `con_incidencia` | `ventas_notas_remision` |
-| `po_estado` | `abierta`, `parcialmente_surtida`, `surtida`, `facturada`, `pagada_cerrada`, `cancelada` (`043`, ciclo de surtido — antes `recibida`/`en_validacion`/`parcialmente_vinculada`/`vinculada`/`pendiente_de_confirmacion`/`rechazada`/`corregida`) | `ventas_ordenes_compra_cliente` |
-| `vinculo_estado` | `pendiente`, `validado`, `rechazado_por_precio`, `rechazado_por_cantidad`, `rechazado_por_duplicidad`, `aprobado_para_facturacion`, `facturado`, `cancelado` | `ventas_po_nr_vinculos` |
-| `ventas_autorizacion_tipo` | `excepcion_subtotal`, `codigo_divergente`, `duplicidad_confirmada`, `correccion_documento` | `ventas_autorizaciones` |
+| `po_estado` | `pendiente_de_autorizacion`, `abierta`, `parcialmente_surtida`, `surtida`, `vinculada`, `facturada`, `pagada_cerrada`, `cancelada` (`043` ciclo de surtido de Vía B; `046`/`050` añade `pendiente_de_autorizacion`/`vinculada` para Vía A — antes `recibida`/`en_validacion`/`parcialmente_vinculada`/`vinculada`/`pendiente_de_confirmacion`/`rechazada`/`corregida`) | `ventas_ordenes_compra_cliente` |
+| `po_origen` | `cotizacion_aprobada`, `posterior_a_entrega` (`047`) | `ventas_ordenes_compra_cliente.origen` |
+| `po_partida_tipo` | `compromiso`, `respaldo` (`047`) | `ventas_po_partidas.tipo` |
+| `vinculo_estado` | `pendiente`, `validado`, `rechazado_por_precio`, `rechazado_por_cantidad`, `rechazado_por_duplicidad`, `aprobado_para_facturacion`, `facturado`, `cancelado` (vínculos nacen directo en `validado` desde `048`, `pendiente` sin escritor) | `ventas_po_nr_vinculos` |
+| `ventas_autorizacion_tipo` | `excepcion_subtotal`, `codigo_divergente`, `duplicidad_confirmada`, `correccion_documento` (sin productor, eran de la Vía A original 033), `precio_po_divergente`, `ampliacion_po` (`046`, Vía A nueva) | `ventas_autorizaciones` |
 | `ventas_autorizacion_estado` | `pendiente`, `autorizada`, `rechazada` | `ventas_autorizaciones` |
 | `cliente_tipo` | `credito`, `contado`, `pago_anticipado`, `facturacion_inmediata` | `clientes.tipo_cliente` |
 | `cliente_congelamiento_estado` | `activo`, `liberado` | `cliente_congelamientos` |
@@ -142,15 +144,22 @@ Documentación de procesos (cómo se usa esto paso a paso) en `db/procesos/`.
 | `ventas_consulta_responder()` / `_cancelar()` (`030`) | `jsonb` | Compras-ligero formalizado — responde con producto+costo y propaga a las líneas en consulta (que quedan pendientes de que Ventas elija precio) |
 | `ventas_pedido_liberar_almacen()` (`031`) | `jsonb` | Reserva → compromiso: un solo `UPDATE` de `nivel` que no toca `cantidad_apartada` |
 | `apartados_before_update()` (`011`, reemplazada en `031`, `035`) | trigger | Añade el congelamiento de `pedido_id`/`pedido_linea_id` y prohíbe `compromiso→reserva` sobre la función que ya usa Almacén |
-| `ventas_nr_emitir()` / `ventas_nr_despachar()` (`032`, `despachar` reemplazada en `035`/`044`, `emitir` reemplazada en `044`) | `jsonb` | Emite la NR (Vía A, rechaza un pedido `via='orden_compra'` desde `044`) y despacha al kardex (`salida_venta` + consumo/partición de apartado, emparejado por `pedido_linea_id` exacto) — única vía por la que `ventas` llega a escribir en `inventario_movimientos` sin ampliar su RLS |
-| `ventas_po_despachar()` (`044`) | `jsonb` | Espejo de `ventas_nr_despachar()` para la Vía B: despacha partidas de la PO directo al kardex (`referencia_tipo='orden_compra_cliente'`), sin NR — mismo emparejamiento por `pedido_linea_id`, mismo patrón de consumir/reinsertar el remanente del apartado |
-| `ventas_po_adjuntar_evidencia()` / `ventas_po_cancelar()` (`044`) | `jsonb` | Adjunta/reemplaza el documento de PO del cliente (única vía, sin GRANT UPDATE de tabla) y cancela una PO sin nada surtido — `_cancelar()` sin consumidor de UI, la cancelación real pasa por `ventas_cotizacion_cancelar()` |
+| `ventas_nr_emitir()` / `ventas_nr_despachar()` (`032`, `despachar` reemplazada en `035`/`044`, `emitir` reemplazada en `044`) | `jsonb` | Emite la NR (rechaza un pedido `via='orden_compra'` desde `044`) y despacha al kardex (`salida_venta` + consumo/partición de apartado, emparejado por `pedido_linea_id` exacto) — única vía por la que `ventas` llega a escribir en `inventario_movimientos` sin ampliar su RLS |
+| `ventas_po_despachar()` (`044`, generalizada en `048`) | `jsonb` | Despacha partidas de **compromiso** de la PO directo al kardex (`referencia_tipo='orden_compra_cliente'`), sin NR — rechaza partidas de tipo `respaldo` y PO congeladas; el apartado se resuelve por `pedido_linea_id` (caso C) o `po_partida_id` (caso N, sin pedido) según cuál tenga la partida; recalcula todos los pedidos que toque, no sólo uno — ya no exige un único `pedido_id` en la PO |
+| `ventas_po_adjuntar_evidencia()` (`044`) / `ventas_po_cancelar()` (`044`, ampliada en `048`) | `jsonb` | Adjunta/reemplaza el documento de PO del cliente (única vía, sin GRANT UPDATE de tabla) y cancela una PO — admite `abierta`/`pendiente_de_autorizacion`/`vinculada` (nada surtido por esta PO); cancela sus vínculos activos y libera sus apartados propios (caso N) antes de cancelar. Sin consumidor de UI en esta entrega — la cancelación real pasa por `ventas_cotizacion_cancelar()` |
 | `ventas_nr_seguimiento_after_insert()` (`032`) | trigger | Cachea el último seguimiento en `ventas_notas_remision.ultimo_contacto_at`/`nota_ultimo_contacto` |
-| `ventas_autorizacion_resolver()` (`033`) | `jsonb` | Resuelve una excepción/corrección de Ventas — el aprobador nunca puede ser el solicitante |
-| `vinculo_valida_cobertura_nr()` / `_partida()` (`033`) | constraint trigger diferido | Impide que la cobertura de PO exceda lo entregado de la NR o lo declarado de la partida — evita el doble conteo sin contador denormalizado |
-| ~~`ventas_po_validar()`~~ (`033`, **retirada en `043`**) | `jsonb` | El cruce de precios: moneda → RFC → costo unitario (bloqueo total sin excepción) → subtotal coincidente (requiere autorización) → código divergente → duplicidad. Recalcula estados de PO/NR por agregación. Era para la Vía A (PO tardía); pendiente de reconstruir |
-| `ventas_nr_cobertura()` / `ventas_tablero_nr()` / `ventas_kpis()` (`034`) | `jsonb` / tabla / `jsonb` | Lecturas agregadas del tablero de seguimiento — antigüedad y monto pendiente siempre calculados, nunca almacenados |
+| `ventas_autorizacion_resolver()` (`033`, ampliada en `048`) | `jsonb` | Resuelve una excepción/corrección de Ventas — el aprobador nunca puede ser el solicitante. Desde `048` despacha además a `ventas_po_resolver_autorizacion()` si el documento es una PO (`precio_po_divergente`/`ampliacion_po`) |
+| `vinculo_valida_cobertura_nr()` / `_partida()` (`033`) | constraint trigger diferido | Impide que la cobertura de PO exceda lo entregado de la NR o lo declarado de la partida — evita el doble conteo sin contador denormalizado. Reutilizados **tal cual** por la Vía A nueva (`048`): es el requisito "una línea de NR ya cubierta del todo no vuelve a estar disponible" hecho cumplir por el propio esquema |
+| ~~`ventas_po_validar()`~~ / ~~`ventas_vinculo_cancelar()`~~ (`033`/`036`, **retiradas en `043`**) | `jsonb` | El cruce de precios de la Vía A **original**: moneda → RFC → costo unitario (bloqueo total sin excepción) → subtotal coincidente (requiere autorización) → código divergente → duplicidad, recalculando estados por agregación. No se resucitó — la Vía A nueva (`046`-`051`) construyó un modelo distinto (congelamiento de PO completa por precio divergente, ver abajo); `ventas_vinculo_cancelar()` sí se restauró en `048`, con cuerpo nuevo |
+| `ventas_nr_cobertura()` (`034`, ampliada en `048`) / `ventas_kpis()` (`034`) | `jsonb` | `ventas_nr_cobertura()` separa el respaldo real (PO no congelada) del "en autorización" (vínculos de una PO `pendiente_de_autorizacion`) — antes de `048` siempre devolvía 0 de respaldo. ~~`ventas_tablero_nr()`~~ (**retirada en `051`**, sin consumidores) — sustituida por la vista `ventas_notas_remision_listado` (`049`) |
 | `ventas_cotizaciones_expirar()` (`034`) | `integer` | Barrido oportunista (sin cron en el proyecto) invocado al cargar el listado |
+| `ventas_po_crear_desde_nr()` (`048`) | `jsonb` | Núcleo de la Vía A: registra la PO desde el tablero de NR con partidas de respaldo (ya entregadas, vía `ventas_po_agregar_partidas()`) y por entregar — de una cotización existente (delega en `ventas_cotizacion_aprobar()` con `po_id`) o nuevas del catálogo. Congela la PO si hay divergencia de precio contra la NR |
+| `ventas_po_agregar_partidas()` (`048`, interna) | `jsonb` | Helper compartido por `ventas_po_crear_desde_nr()` y `ventas_po_resolver_autorizacion()` (al materializar una ampliación aprobada) — inserta partidas de respaldo+vínculo o de compromiso nuevo+apartado por `po_partida_id`. Sin GRANT a `authenticated` |
+| `ventas_po_ampliar()` / `ventas_po_corregir_precio()` (`048`) | `jsonb` | Agregar más NR/partidas a una PO ya creada requiere autorización (`ampliar()`, congela sin materializar) — `corregir_precio()` es el único camino de salida cuando una autorización de precio fue rechazada; si tras corregir ya no hay divergencia, descongela sola |
+| `ventas_po_liberar_almacen()` (`048`) | `jsonb` | Promueve reserva→compromiso los apartados propios de la PO (caso N) y, por cada pedido distinto que sus partidas de compromiso referencien (caso C), reutiliza `ventas_pedido_liberar_almacen()` — un solo botón para la PO mixta |
+| `ventas_nr_lineas_disponibles()` (`048`) | tabla | Requisito "una línea de NR ya cubierta no vuelve a estar disponible" hecho consulta: `disponible = cantidad_entregada - Σ cantidad_cubierta` de vínculos activos, filtrado a `> 0` |
+| `ventas_po_recalcular_estado()` / `ventas_nr_recalcular_estado()` / `ventas_po_nrs_afectadas()` (`048`, interna) | `void` / `void` / `uuid[]` | Recalculan el estado de PO/NR por conteo de partidas/líneas pendientes, nunca por agregado de montos (evita el defecto histórico de `033`) — invocados tras cualquier cambio de vínculo/precio/despacho. `ventas_po_recalcular_estado()` corregida en `050` (ver Gotchas de `CLAUDE.md`: "vinculada" no aplicaba a una PO sin ninguna partida de respaldo) |
+| `ventas_po_resolver_autorizacion()` (`048`, interna) | `void` | Dispatch desde `ventas_autorizacion_resolver()`: materializa una ampliación aprobada o descongela por precio aceptado; si el rechazo es de una ampliación, revierte al estado previo (`version_anterior`) |
 
 Todas llevan `SET search_path = public, pg_temp` (evita inyección de esquema) y
 las que son sólo para disparar por trigger (`entidades_before_insert`,
@@ -1210,6 +1219,27 @@ append-only; un trigger cachea el último registro en la cabecera de la NR.
 > triggers* diferidos se conservan intactos pero inertes (sin GRANT de
 > escritura) — son lo que necesita la Vía A (PO que llega DESPUÉS de una
 > NR) cuando se reconstruya. Ver `CLAUDE.md` → Historial y TODO.
+
+> **Actualización 2026-08-08 (046-051, sesión concurrente con la de
+> arriba): Vía A construida — distinta de lo que describe el resto de
+> esta sección.** `ventas_po_nr_vinculos` volvió a tener escritor, pero
+> **no** es `ventas_po_validar()` restaurada: los vínculos nacen
+> directamente en `'validado'` desde `ventas_po_agregar_partidas()`
+> (`048`), sin el cruce de moneda/RFC/costo/código/duplicidad de abajo.
+> `ventas_po_partidas` ganó `tipo` (`compromiso`/`respaldo`, `047`) —
+> una PO de Vía A mezcla partidas ya entregadas (respaldo, con vínculo) y
+> por entregar (compromiso, de un pedido o de `po_partida_id` sin pedido,
+> caso N). `ventas_ordenes_compra_cliente` ganó `origen` (`047`) y dos
+> estados nuevos, `pendiente_de_autorizacion`/`vinculada` (`046`/`050`) —
+> el bloqueo por precio divergente de esta entrega congela **la PO
+> completa**, igual que hacía `ventas_po_validar()`, pero vía
+> `ventas_autorizaciones.precio_po_divergente` (`046`), no el `CHECK`
+> inline de subtotal coincidente descrito abajo. La FK compuesta
+> `ventas_po_partidas_po_pedido_fkey` (descrita más abajo bajo "N↔M por
+> partida") se **dropeó** en `047` — incompatible con una PO que respalda
+> NR de pedidos distintos — y se sustituyó por el trigger
+> `po_partida_coherencia_pedido()`. Detalle completo en `CLAUDE.md` →
+> Historial (2026-08-08, Vía A).
 
 La tabla de asignación N↔M por partida — decisión técnica central del
 documento del dueño del proyecto. `numero_po_normalizado` (columna

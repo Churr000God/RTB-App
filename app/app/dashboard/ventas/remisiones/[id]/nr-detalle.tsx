@@ -14,7 +14,7 @@ import { ROLES_DESPACHAN_NR } from '@/lib/ventas/config';
 import { CANAL_ORIGENES } from '@/types/entidades';
 import { CANAL_ORIGEN_LABELS } from '@/lib/entidades/config';
 import type { UserRole } from '@/types/database';
-import { ArrowLeft, AlertCircle, Loader2, Send, Truck } from 'lucide-react';
+import { ArrowLeft, AlertCircle, FileText, Loader2, Send, Truck } from 'lucide-react';
 
 interface Props {
   nr: any;
@@ -22,13 +22,17 @@ interface Props {
   seguimientos: any[];
   cobertura: any;
   rol: UserRole;
+  puedeRegistrarPo: boolean;
 }
 
 // nr/lineas/seguimientos/cobertura llegan como props del Server Component;
 // cada mutación (despachar, seguimiento) pasa por useAccionServidor(), que
-// hace router.refresh() para que las 4 tarjetas de cobertura y la tabla se
-// recalculen solas (contexto/AUDITORIA_RTB-VEN-01.md §7.3).
-export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol }: Props) {
+// hace router.refresh() para que las tarjetas de cobertura y la tabla se
+// recalculen solas (contexto/AUDITORIA_RTB-VEN-01.md §7.3). cobertura viene
+// de ventas_nr_cobertura() (034/048): ya distingue el respaldo real (PO no
+// congelada) del "en autorización" (vínculos de una PO pendiente de
+// resolver) — antes de la Vía A (046-048) siempre daba $0 en ambos.
+export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol, puedeRegistrarPo }: Props) {
   const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
   const puedeDespachar = (ROLES_DESPACHAN_NR as readonly string[]).includes(rol);
 
@@ -49,7 +53,20 @@ export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol }: Props) {
           </h1>
           <p className="text-muted-foreground mt-1">{nr.entidades?.nombre_comercial ?? nr.entidades?.nombre_legal}</p>
         </div>
-        {puedeDespachar && <DespacharDialog nrId={nr.id} lineas={lineas} ejecutar={ejecutar} ocupado={ocupado} setError={setError} />}
+        <div className="flex items-center gap-2">
+          {puedeRegistrarPo && (
+            <Button variant="outline" asChild>
+              <Link
+                href={`/dashboard/ventas/remisiones/nueva-po?entidad_id=${nr.entidad_id}&nr_id=${nr.id}&entidad_label=${encodeURIComponent(
+                  nr.entidades?.nombre_comercial ?? nr.entidades?.nombre_legal ?? ''
+                )}`}
+              >
+                <FileText className="w-4 h-4 mr-2" /> Registrar PO
+              </Link>
+            </Button>
+          )}
+          {puedeDespachar && <DespacharDialog nrId={nr.id} lineas={lineas} ejecutar={ejecutar} ocupado={ocupado} setError={setError} />}
+        </div>
       </div>
 
       {error && (
@@ -60,13 +77,18 @@ export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol }: Props) {
       )}
 
       {cobertura && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Tarjeta label="Entregado" valor={formatearMoneda(cobertura.monto_entregado)} />
           <Tarjeta label="Respaldado por PO" valor={formatearMoneda(cobertura.monto_respaldado)} />
           <Tarjeta
+            label="En autorización"
+            valor={formatearMoneda(cobertura.monto_en_autorizacion)}
+            alerta={cobertura.monto_en_autorizacion > 0}
+          />
+          <Tarjeta
             label="Pendiente de PO"
-            valor={formatearMoneda(cobertura.monto_entregado - cobertura.monto_respaldado)}
-            alerta={cobertura.monto_entregado - cobertura.monto_respaldado > 0}
+            valor={formatearMoneda(cobertura.monto_entregado - cobertura.monto_respaldado - cobertura.monto_en_autorizacion)}
+            alerta={cobertura.monto_entregado - cobertura.monto_respaldado - cobertura.monto_en_autorizacion > 0}
           />
           <Tarjeta label="Valor total" valor={formatearMoneda(nr.valor_total)} />
         </div>
@@ -100,16 +122,6 @@ export function NrDetalle({ nr, lineas, seguimientos, cobertura, rol }: Props) {
       </div>
 
       <SeguimientoCard nrId={nr.id} seguimientos={seguimientos} />
-
-      <div className="p-4 bg-rtb-surface/60 rounded-lg text-sm text-muted-foreground">
-        El respaldo por PO de una NR (Vía A: la PO llega DESPUÉS de la entrega) está pendiente de reconstruir — las
-        tarjetas de arriba seguirán en $0 hasta entonces. Si el cliente ya emitió su PO al momento de aprobar, esa
-        venta se registra directo como{' '}
-        <Link href="/dashboard/ventas/ordenes-compra" className="text-rtb-teal hover:underline font-medium">
-          Orden de Compra
-        </Link>{' '}
-        desde la cotización, sin pasar por una NR.
-      </div>
     </div>
   );
 }

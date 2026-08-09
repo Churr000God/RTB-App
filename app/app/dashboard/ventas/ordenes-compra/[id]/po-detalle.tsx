@@ -6,11 +6,16 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { POEstadoBadge } from '@/components/ventas/estado-badge';
 import { ProductoEtiqueta } from '@/components/inventario/producto-etiqueta';
+import { ProductoCombobox } from '@/components/inventario/producto-combobox';
 import { Actualizando } from '@/components/ui/actualizando';
+import { Label } from '@/components/ui/label';
 import { useAccionServidor } from '@/lib/ui/use-accion-servidor';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { formatearMoneda } from '@/lib/ventas/validaciones';
-import { ArrowLeft, CheckCircle2, FileText, Loader2, Upload, X } from 'lucide-react';
+import { PO_ORIGEN_LABELS } from '@/lib/ventas/config';
+import {
+  AlertTriangle, ArrowLeft, CheckCircle2, FileText, Loader2, Package, Plus, Trash2, Truck, Upload, X,
+} from 'lucide-react';
 
 const DOCUMENTO_PO_MIMES = ['application/pdf', 'image/jpeg', 'image/png'];
 const DOCUMENTO_PO_EXTENSIONES = '.pdf,.jpg,.jpeg,.png';
@@ -24,6 +29,11 @@ function formatearTamano(bytes: number): string {
 interface Props {
   po: any;
   partidas: any[];
+  vinculos: any[];
+  autorizacionPendiente: any;
+  puedeAmpliar: boolean;
+  puedeLiberar: boolean;
+  puedeCancelarVinculo: boolean;
 }
 
 // po/partidas llegan como props del Server Component — sin espejo en
@@ -31,10 +41,20 @@ interface Props {
 // useAccionServidor(), que hace router.refresh(). Sin diálogo de despacho
 // aquí: vive en el detalle del pedido (Almacén entra por ahí, no tiene
 // acceso a esta pantalla — ver ACCESO_PANTALLA.ordenes_compra). Sin botón
-// de cancelar: la cancelación de negocio real pasa por
-// "Cancelar cotización" en el detalle de la cotización.
-export function PoDetalle({ po, partidas }: Props) {
+// de cancelar la PO completa en esta entrega (función lista en 048, sin
+// consumidor de UI todavía — la cancelación de negocio real pasa por
+// "Cancelar cotización" en el detalle de la cotización).
+export function PoDetalle({ po, partidas, vinculos, autorizacionPendiente, puedeAmpliar, puedeLiberar, puedeCancelarVinculo }: Props) {
   const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
+
+  const partidasRespaldo = partidas.filter((p) => p.tipo === 'respaldo');
+  const partidasCompromiso = partidas.filter((p) => p.tipo !== 'respaldo');
+  const vinculoPorPartida = new Map(vinculos.map((v) => [v.po_partida_id, v]));
+
+  const liberar = async () => {
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${po.id}/liberar`, { method: 'POST' });
+    if (res.ok) toast.success('PO liberada a Almacén.');
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -52,8 +72,19 @@ export function PoDetalle({ po, partidas }: Props) {
             <Actualizando activo={refrescando} />
           </h1>
           <p className="text-muted-foreground mt-1">
-            PO #{po.numero_po} · {po.entidades?.nombre_comercial ?? po.entidades?.nombre_legal} · {po.moneda}
+            PO #{po.numero_po} · {po.entidades?.nombre_comercial ?? po.entidades?.nombre_legal} · {po.moneda} ·{' '}
+            {PO_ORIGEN_LABELS[po.origen as keyof typeof PO_ORIGEN_LABELS] ?? po.origen}
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {puedeLiberar && po.estado === 'abierta' && partidasCompromiso.length > 0 && (
+            <Button onClick={liberar} disabled={ocupado} variant="outline">
+              <Truck className="w-4 h-4 mr-2" /> Liberar a Almacén
+            </Button>
+          )}
+          {puedeAmpliar && !['cancelada', 'facturada', 'pagada_cerrada', 'pendiente_de_autorizacion'].includes(po.estado) && (
+            <AmpliarDialog poId={po.id} ejecutar={ejecutar} ocupado={ocupado} />
+          )}
         </div>
       </div>
 
@@ -76,6 +107,16 @@ export function PoDetalle({ po, partidas }: Props) {
         )}
       </div>
 
+      {po.estado === 'pendiente_de_autorizacion' && autorizacionPendiente && (
+        <AutorizacionBanner
+          po={po}
+          autorizacion={autorizacionPendiente}
+          partidasRespaldo={partidasRespaldo}
+          ejecutar={ejecutar}
+          ocupado={ocupado}
+        />
+      )}
+
       <DocumentoCard
         poId={po.id}
         tieneDocumento={!!po.evidencia_path}
@@ -86,7 +127,334 @@ export function PoDetalle({ po, partidas }: Props) {
         setError={setError}
       />
 
-      <PartidasCard partidas={partidas} moneda={po.moneda} />
+      {partidasRespaldo.length > 0 && (
+        <RespaldoCard
+          partidas={partidasRespaldo}
+          vinculoPorPartida={vinculoPorPartida}
+          moneda={po.moneda}
+          puedeCancelar={puedeCancelarVinculo}
+          poId={po.id}
+          ejecutar={ejecutar}
+          ocupado={ocupado}
+        />
+      )}
+
+      <PartidasCard partidas={partidasCompromiso} moneda={po.moneda} soloRespaldo={partidas.length > 0 && partidasCompromiso.length === 0} />
+    </div>
+  );
+}
+
+function AutorizacionBanner({
+  po,
+  autorizacion,
+  partidasRespaldo,
+  ejecutar,
+  ocupado,
+}: {
+  po: any;
+  autorizacion: any;
+  partidasRespaldo: any[];
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
+}) {
+  const rechazada = autorizacion.estado === 'rechazada';
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+      <div className="flex items-start gap-2 text-amber-800">
+        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+        <div className="text-sm">
+          <p className="font-medium">
+            {autorizacion.tipo === 'precio_po_divergente' ? 'Precio distinto al de la NR' : 'Ampliación de PO'} —{' '}
+            {rechazada ? 'rechazada' : 'esperando autorización de Dirección'}
+          </p>
+          <p className="mt-0.5">
+            {rechazada
+              ? 'Corrige el precio abajo para volver a intentar, o solicita una nueva autorización.'
+              : 'Esta PO no respalda ninguna NR ni se puede surtir hasta que se resuelva.'}
+          </p>
+          {!rechazada && (
+            <Link href="/dashboard/ventas/autorizaciones" className="text-xs text-rtb-teal hover:underline mt-1 inline-block">
+              Ver en la bandeja de autorizaciones →
+            </Link>
+          )}
+        </div>
+      </div>
+      {rechazada && autorizacion.tipo === 'precio_po_divergente' && (
+        <CorregirPrecioForm poId={po.id} partidasRespaldo={partidasRespaldo} ejecutar={ejecutar} ocupado={ocupado} />
+      )}
+    </div>
+  );
+}
+
+function CorregirPrecioForm({
+  poId,
+  partidasRespaldo,
+  ejecutar,
+  ocupado,
+}: {
+  poId: string;
+  partidasRespaldo: any[];
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
+}) {
+  const [precios, setPrecios] = useState<Record<string, number>>(() =>
+    Object.fromEntries(partidasRespaldo.map((p) => [p.id, Number(p.precio_unitario)]))
+  );
+  const [motivo, setMotivo] = useState('');
+
+  const corregir = async () => {
+    if (motivo.trim().length < 3) {
+      toast.error('Describe el motivo de la corrección.');
+      return;
+    }
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/corregir-precio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        partidas: partidasRespaldo.map((p) => ({ po_partida_id: p.id, precio_unitario: precios[p.id] })),
+        motivo,
+      }),
+    });
+    if (!res.ok) return;
+    if (res.data?.data?.sigue_divergente) {
+      toast.warning('Sigue habiendo diferencia de precio — se generó una nueva autorización.');
+    } else {
+      toast.success('Precio corregido — la PO se descongeló.');
+    }
+    setMotivo('');
+  };
+
+  return (
+    <div className="space-y-2 pt-2 border-t border-amber-200">
+      {partidasRespaldo.map((p) => (
+        <div key={p.id} className="flex items-center gap-3">
+          <span className="text-xs flex-1 truncate">{p.productos?.nombre ?? p.descripcion ?? 'Producto'}</span>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            value={precios[p.id] ?? 0}
+            onChange={(e) => setPrecios((prev) => ({ ...prev, [p.id]: Number(e.target.value) }))}
+            className="w-28 text-sm border border-border rounded px-2 py-1"
+          />
+        </div>
+      ))}
+      <input
+        value={motivo}
+        onChange={(e) => setMotivo(e.target.value)}
+        placeholder="Motivo de la corrección"
+        className="w-full text-sm border border-border rounded px-2 py-1"
+      />
+      <Button size="sm" onClick={corregir} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+        Corregir precio
+      </Button>
+    </div>
+  );
+}
+
+function AmpliarDialog({
+  poId,
+  ejecutar,
+  ocupado,
+}: {
+  poId: string;
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [partidas, setPartidas] = useState<
+    { key: string; producto_id: string | null; unidad_medida_id: string | null; cantidad: number; precio_unitario: number }[]
+  >([]);
+  const [motivo, setMotivo] = useState('');
+
+  const agregar = () =>
+    setPartidas((prev) => [
+      ...prev,
+      { key: crypto.randomUUID(), producto_id: null, unidad_medida_id: null, cantidad: 1, precio_unitario: 0 },
+    ]);
+
+  const enviar = async () => {
+    const validas = partidas.filter((p) => p.producto_id && p.unidad_medida_id && p.cantidad > 0);
+    if (validas.length === 0) {
+      toast.error('Agrega al menos una partida.');
+      return;
+    }
+    if (motivo.trim().length < 3) {
+      toast.error('Describe el motivo de la ampliación.');
+      return;
+    }
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/ampliar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        compromiso_nuevas: validas.map((p) => ({
+          producto_id: p.producto_id,
+          unidad_medida_id: p.unidad_medida_id,
+          cantidad: p.cantidad,
+          precio_unitario: p.precio_unitario,
+        })),
+        motivo,
+      }),
+    });
+    if (!res.ok) return;
+    toast.warning('Ampliación solicitada — la PO queda congelada hasta que Dirección la autorice.');
+    setAbierto(false);
+    setPartidas([]);
+    setMotivo('');
+  };
+
+  if (!abierto) {
+    return (
+      <Button variant="outline" onClick={() => setAbierto(true)}>
+        <Plus className="w-4 h-4 mr-2" /> Ampliar
+      </Button>
+    );
+  }
+
+  return (
+    <div className="w-full bg-white rounded-xl p-5 space-y-3 border border-border" style={{ boxShadow: 'var(--shadow-sm)' }}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-display font-semibold text-rtb-navy">Ampliar PO — requiere autorización</h3>
+        <button onClick={() => setAbierto(false)} className="text-muted-foreground hover:text-foreground">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Producto nuevo del catálogo, sin cotización — se materializa sólo si Dirección aprueba.
+      </p>
+      {partidas.map((p) => (
+        <div key={p.key} className="flex items-end gap-2">
+          <div className="flex-1">
+            <Label className="text-[11px] text-muted-foreground">Producto</Label>
+            <ProductoCombobox
+              value={p.producto_id}
+              onChange={(id) => {
+                if (!id) return;
+                fetch(`/api/productos/${id}`)
+                  .then((r) => r.json())
+                  .then((d) =>
+                    setPartidas((prev) =>
+                      prev.map((row) => (row.key === p.key ? { ...row, producto_id: id, unidad_medida_id: d.producto?.unidad_medida_id ?? null } : row))
+                    )
+                  );
+              }}
+            />
+          </div>
+          <div>
+            <Label className="text-[11px] text-muted-foreground">Cantidad</Label>
+            <input
+              type="number"
+              min={0.0001}
+              step="any"
+              value={p.cantidad}
+              onChange={(e) => setPartidas((prev) => prev.map((row) => (row.key === p.key ? { ...row, cantidad: Number(e.target.value) } : row)))}
+              className="w-24 text-sm border border-border rounded px-2 py-1"
+            />
+          </div>
+          <div>
+            <Label className="text-[11px] text-muted-foreground">Precio</Label>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={p.precio_unitario}
+              onChange={(e) =>
+                setPartidas((prev) => prev.map((row) => (row.key === p.key ? { ...row, precio_unitario: Number(e.target.value) } : row)))
+              }
+              className="w-28 text-sm border border-border rounded px-2 py-1"
+            />
+          </div>
+          <Button variant="ghost" size="icon" onClick={() => setPartidas((prev) => prev.filter((row) => row.key !== p.key))}>
+            <Trash2 className="w-4 h-4 text-red-600" />
+          </Button>
+        </div>
+      ))}
+      <Button variant="outline" size="sm" onClick={agregar}>
+        <Plus className="w-4 h-4 mr-1" /> Agregar partida
+      </Button>
+      <input
+        value={motivo}
+        onChange={(e) => setMotivo(e.target.value)}
+        placeholder="Motivo de la ampliación"
+        className="w-full text-sm border border-border rounded px-2 py-1"
+      />
+      <Button onClick={enviar} disabled={ocupado} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+        Solicitar ampliación
+      </Button>
+    </div>
+  );
+}
+
+function RespaldoCard({
+  partidas,
+  vinculoPorPartida,
+  moneda,
+  puedeCancelar,
+  poId,
+  ejecutar,
+  ocupado,
+}: {
+  partidas: any[];
+  vinculoPorPartida: Map<string, any>;
+  moneda: string;
+  puedeCancelar: boolean;
+  poId: string;
+  ejecutar: (url: string, init?: RequestInit) => Promise<{ ok: boolean; data: any }>;
+  ocupado: boolean;
+}) {
+  const cancelar = async (vinculoId: string) => {
+    const motivo = window.prompt('Motivo de la cancelación del vínculo:');
+    if (!motivo || motivo.trim().length < 3) return;
+    const res = await ejecutar(`/api/ventas/ordenes-compra/${poId}/vinculos/${vinculoId}/cancelar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo }),
+    });
+    if (res.ok) toast.success('Vínculo cancelado.');
+  };
+
+  return (
+    <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
+      <h2 className="text-sm font-display font-semibold text-rtb-navy">Respalda entregas ya hechas</h2>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-muted-foreground uppercase">
+            <th className="py-1">Producto</th>
+            <th className="py-1">NR</th>
+            <th className="py-1 text-right">Cantidad</th>
+            <th className="py-1 text-right">Precio NR</th>
+            <th className="py-1 text-right">Precio PO</th>
+            <th className="py-1"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {partidas.map((p) => {
+            const vinculo = vinculoPorPartida.get(p.id);
+            const precioNr = vinculo?.ventas_nr_lineas?.precio_unitario;
+            const divergente = precioNr !== undefined && Number(precioNr) !== Number(p.precio_unitario);
+            return (
+              <tr key={p.id} className="border-t border-border/50">
+                <td className="py-2">
+                  <ProductoEtiqueta producto={p.productos} descripcion={p.descripcion} productoId={p.producto_id} />
+                </td>
+                <td className="py-2 text-xs text-muted-foreground">{vinculo?.ventas_nr_lineas?.ventas_notas_remision?.folio ?? '—'}</td>
+                <td className="py-2 text-right tabular-nums">{p.cantidad}</td>
+                <td className="py-2 text-right tabular-nums text-muted-foreground">{precioNr !== undefined ? formatearMoneda(precioNr, moneda) : '—'}</td>
+                <td className={`py-2 text-right tabular-nums ${divergente ? 'text-amber-700 font-medium' : ''}`}>
+                  {formatearMoneda(p.precio_unitario, moneda)}
+                </td>
+                <td className="py-2 text-right">
+                  {puedeCancelar && vinculo && (
+                    <Button variant="ghost" size="sm" onClick={() => cancelar(vinculo.id)} disabled={ocupado}>
+                      Cancelar
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -279,11 +647,11 @@ function DocumentoCard({
   );
 }
 
-function PartidasCard({ partidas, moneda }: { partidas: any[]; moneda: string }) {
+function PartidasCard({ partidas, moneda, soloRespaldo }: { partidas: any[]; moneda: string; soloRespaldo: boolean }) {
   return (
     <div className="bg-white rounded-xl p-5 space-y-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
-      <h2 className="text-sm font-display font-semibold text-rtb-navy">
-        Partidas — copiadas del pedido al aprobar, no se capturan a mano
+      <h2 className="text-sm font-display font-semibold text-rtb-navy flex items-center gap-2">
+        <Package className="w-4 h-4" /> Por entregar
       </h2>
 
       <table className="w-full text-sm">
@@ -315,7 +683,7 @@ function PartidasCard({ partidas, moneda }: { partidas: any[]; moneda: string })
           {partidas.length === 0 && (
             <tr>
               <td colSpan={7} className="py-6 text-center text-muted-foreground text-xs">
-                Sin partidas — es una PO de la Vía A (previa a este cambio).
+                {soloRespaldo ? 'Esta PO sólo respalda entregas ya hechas — nada por entregar.' : 'Sin partidas todavía.'}
               </td>
             </tr>
           )}

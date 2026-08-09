@@ -2,11 +2,12 @@
 
 **Proyecto:** Refacciones Tomás Badillo, S.A. de C.V.
 **Submódulo:** RTB-VEN-01 Ventas (cotización → PO vinculada)
-**Versión:** 1.1 (actualizado 2026-08-08 — ver nota abajo)
+**Versión:** 1.2 (actualizado 2026-08-08 — ver nota abajo)
 **Fecha:** 2026-08-07
-**Estado:** Implementado — Vía A y Vía B completas (Vía B cerrada
-2026-08-08, migraciones 043/044); Vía A **de PO tardía** (la que llega
-DESPUÉS de una NR) pendiente — ver §6/§10
+**Estado:** Implementado — Vía A y Vía B completas. Vía B (PO directa al
+aprobar la cotización) cerrada 2026-08-08 (043/044). Vía A **de PO tardía**
+(la que llega DESPUÉS de una o varias NR ya emitidas) cerrada el mismo día
+en sesión concurrente (046-051) — ver §6/§10
 
 > **Actualización 2026-08-08:** el resto de este documento describe el
 > diseño original del 2026-08-07 ("Vía B pendiente", validación de PO por
@@ -204,6 +205,16 @@ son exactamente lo que hace falta para la **Vía A** (una PO que llega
 DESPUÉS de una NR, sin que la cotización se haya aprobado como PO),
 deliberadamente fuera de esta entrega. Ver §10 y `CLAUDE.md` TODO.
 
+**Actualización 2026-08-08 (sesión concurrente, 046-051): Vía A
+construida.** No revivió `ventas_po_validar()` ni su cruce de
+moneda/RFC/costo/código/duplicidad — construyó un modelo distinto sobre
+la maquinaria que quedó inerte arriba: `ventas_po_nr_vinculos` sí se
+reutilizó (sus 2 *constraint triggers* diferidos son literalmente el
+requisito de "no volver a asociar una línea de NR ya cubierta del
+todo"), pero el registro se hace desde el tablero de NR, no capturando
+una PO en blanco y validándola después. Ver `CLAUDE.md` → Historial
+(2026-08-08, Vía A) para el diseño completo, y §10 abajo.
+
 ## 7. Congelamiento de cartera — a nivel Entidad, tablas nuevas
 
 Separado de `entidades.estado` (que sigue siendo sólo el bloqueo
@@ -243,17 +254,23 @@ Ver también CLAUDE.md → TODO.
   `ventas_po_despachar()`, sin NR. Verificado por SQL con rol real y clic
   a clic (`qa.ventas`/`qa.almacen`), incluido el kardex real confirmado
   por SQL directo. Ver §6.
-- **Vía A (PO que llega DESPUÉS de una NR)** — deliberadamente fuera de la
-  entrega de 043/044, para otra sesión. La maquinaria de vínculos PO↔NR
-  por partida y la bandeja de Autorizaciones se conservaron inertes, no se
-  reconstruyeron desde cero.
+- **Vía A (PO que llega DESPUÉS de una NR) — cerrada 2026-08-08 (046-051,
+  sesión concurrente con la de arriba).** Registro desde el tablero de NR
+  con partidas de respaldo (ya entregadas) y por entregar (de una
+  cotización existente o nuevas del catálogo); cambio de precio congela
+  la PO completa hasta autorización de Dirección. Verificado por SQL con
+  rol real y clic a clic (`qa.ventas`). Fuera de esta segunda entrega:
+  `ventas_po_devolver()` (sin función que abra devolución de una PO
+  puramente de partidas nuevas), ampliar una PO con líneas de otra
+  cotización, y los tipos de autorización de la Vía A **original**
+  (`excepcion_subtotal`/`codigo_divergente`/`duplicidad_confirmada`, 033)
+  siguen sin productor — ver `CLAUDE.md` TODO.
 - **Reloj de cobranza/CFDI/pago** — RTB-PRO-FAC-01, módulo futuro.
 - **Clasificación de discrepancias del puente conteo→ajuste** (hallazgo de
   RTB-INV-01, no de este módulo, documentado aparte en CLAUDE.md TODO).
 - **Clic a clic con sesiones reales de rol** — cerrado para el ciclo de
-  cotización→pedido→NR→despacho (2026-08-07) y para la Vía B PO
-  (2026-08-08, `qa.ventas`/`qa.almacen`). Pendiente sólo para lo que
-  vuelva a construirse en la Vía A.
+  cotización→pedido→NR→despacho (2026-08-07), la Vía B PO (2026-08-08,
+  `qa.ventas`/`qa.almacen`) y la Vía A PO (2026-08-08, `qa.ventas`).
 
 ---
 
