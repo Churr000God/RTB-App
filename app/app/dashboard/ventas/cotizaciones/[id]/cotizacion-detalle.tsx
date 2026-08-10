@@ -73,6 +73,9 @@ interface Props {
   /** clientes.requiere_po del cliente de esta cotización — prellena (no
    *  obliga) la vía sugerida en el diálogo de aprobación (043). */
   requierePo?: boolean;
+  /** clientes.descuento_base — prellena (no obliga) el descuento de cada
+   *  línea nueva en "Agregar línea". */
+  descuentoBaseCliente?: number;
 }
 
 // El servidor manda: cotizacion/lineas llegan como props del Server
@@ -91,6 +94,7 @@ export function CotizacionDetalle({
   envios = [],
   nombresUsuarios = {},
   requierePo = false,
+  descuentoBaseCliente = 0,
 }: Props) {
   const router = useRouter();
   const { ejecutar, ocupado, refrescando, error, setError } = useAccionServidor();
@@ -319,7 +323,9 @@ export function CotizacionDetalle({
         </table>
       </div>
 
-      {puedeEditar && <AgregarLineaForm cotizacionId={cotizacion.id} entidadId={cotizacion.entidad_id} />}
+      {puedeEditar && (
+        <AgregarLineaForm cotizacionId={cotizacion.id} entidadId={cotizacion.entidad_id} descuentoBaseCliente={descuentoBaseCliente} />
+      )}
 
       {envios.length > 0 && <EnviosHistorial envios={envios} nombresUsuarios={nombresUsuarios} />}
     </div>
@@ -564,13 +570,24 @@ function LineaRow({
   );
 }
 
-function AgregarLineaForm({ cotizacionId, entidadId }: { cotizacionId: string; entidadId: string }) {
+function AgregarLineaForm({
+  cotizacionId,
+  entidadId,
+  descuentoBaseCliente,
+}: {
+  cotizacionId: string;
+  entidadId: string;
+  descuentoBaseCliente: number;
+}) {
   const { ejecutar, ocupado, error, setError } = useAccionServidor();
   const [productoId, setProductoId] = useState<string | null>(null);
   const [cantidad, setCantidad] = useState('1');
   const [precioOrigen, setPrecioOrigen] = useState<PrecioOrigenVenta | null>(null);
   const [precios, setPrecios] = useState<any>(null);
   const [consultaOpen, setConsultaOpen] = useState(false);
+  // Prellenado con el descuento base del cliente (clientes.descuento_base)
+  // — sólo un valor de partida, se puede editar por línea antes de agregar.
+  const [descuento, setDescuento] = useState(String(descuentoBaseCliente));
 
   useEffect(() => {
     if (!productoId) {
@@ -594,12 +611,18 @@ function AgregarLineaForm({ cotizacionId, entidadId }: { cotizacionId: string; e
     const res = await ejecutar(`/api/ventas/cotizaciones/${cotizacionId}/lineas`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ producto_id: productoId, cantidad: Number(cantidad), precio_origen: precioOrigen }),
+      body: JSON.stringify({
+        producto_id: productoId,
+        cantidad: Number(cantidad),
+        precio_origen: precioOrigen,
+        descuento_porcentaje: Number(descuento) || 0,
+      }),
     });
     if (!res.ok) return;
     setProductoId(null);
     setCantidad('1');
     setPrecioOrigen(null);
+    setDescuento(String(descuentoBaseCliente));
   };
 
   return (
@@ -637,6 +660,18 @@ function AgregarLineaForm({ cotizacionId, entidadId }: { cotizacionId: string; e
             step="any"
             value={cantidad}
             onChange={(e) => setCantidad(e.target.value)}
+            className="mt-1 w-24 text-sm border border-border rounded-lg px-3 py-2"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Descuento %</Label>
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="any"
+            value={descuento}
+            onChange={(e) => setDescuento(e.target.value)}
             className="mt-1 w-24 text-sm border border-border rounded-lg px-3 py-2"
           />
         </div>

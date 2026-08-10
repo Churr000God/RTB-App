@@ -24,6 +24,7 @@ export const UMBRAL_APROBACION_CREDITO = 100_000;
 export const CAMBIO_CONTROLADO_LABELS: Record<string, string> = {
   rfc: 'RFC',
   razon_social: 'Razón social',
+  persona_tipo: 'Tipo de persona',
   limite_credito: 'Límite de crédito',
   condicion_proveedor: 'Condición de proveedor',
   reactivacion: 'Reactivación',

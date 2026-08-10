@@ -1659,8 +1659,239 @@ contra Supabase — ver TODO.
   ya resuelto por query string (`entidad_label`) desde el botón "Registrar
   PO" del detalle de NR, sin fetch adicional en el cliente.
 
+- **2026-08-10** — `clientes.lista_precio` retirado; `clientes.
+  descuento_maximo` renombrado a `descuento_base`. El dueño del proyecto
+  preguntó para qué servía "Lista de precios" en el alta de entidad — no
+  lo usaba ninguna función de RTB-VEN-01 (el precio de línea es costo ×
+  margen de familia con snapshot, no una tarifa por lista), así que pidió
+  eliminarlo. Verificado antes de dropear: 0 de los clientes reales
+  tenían el campo capturado. Migración `052_clientes_quitar_lista_precio.sql`
+  (`drop column`, retira también el `GRANT UPDATE` de esa columna sin
+  revoke aparte) + limpieza en `nueva/page.tsx`, `entidad-detalle.tsx`,
+  `types/entidades.ts`, `lib/entidades/schemas.ts`.
+
+  Al revisar el campo hermano "Descuento base %" salió el mismo patrón:
+  tampoco estaba enforced — ninguna función valida el `descuento_porcentaje`
+  de una línea de cotización contra `clientes.descuento_maximo` (sólo el
+  `CHECK` genérico 0..100 por línea). A pedido del dueño del proyecto, se
+  implementó "Agregar línea" (`cotizacion-detalle.tsx`) para que
+  prellene el descuento de cada línea nueva con ese valor del cliente —
+  editable, sin tope (nueva prop `descuentoBaseCliente`, de
+  `page.tsx` → `CotizacionDetalle` → `AgregarLineaForm`; el schema/API ya
+  aceptaban `descuento_porcentaje` en el POST, sólo faltaba en la UI).
+  Verificado clic a clic con `qa.ventas`: campo prellenado con el valor
+  del cliente, editado a mano, línea guardada con el importe correcto;
+  datos de prueba revertidos.
+
+  Al preguntarle al dueño del proyecto si `descuento_maximo` debía volverse
+  un tope real (con o sin excepción autorizable) o quedarse como
+  prellenado, confirmó **sólo prellenado** — y pidió corregir el nombre de
+  la columna en la base, porque "máximo" prometía una validación que nunca
+  existió (el nombre siempre fue así desde `002_entidades_core.sql`,
+  anterior a que existiera Ventas; la UI ya le decía "Descuento base %").
+  Migración `053_clientes_descuento_base_rename.sql` (`rename column` —
+  conserva el `GRANT UPDATE` por columna sin tocarlo, el privilegio sigue
+  al atributo). Propagado a todo el código (`types/entidades.ts`,
+  `lib/entidades/schemas.ts`, `nueva/page.tsx`, `entidad-detalle.tsx`,
+  `cotizaciones/[id]/page.tsx`, `cotizacion-detalle.tsx`) y a
+  `db/ESQUEMA.md`. `docker build --target builder` limpio y sin `ERROR`
+  nuevo en el advisor en ambas migraciones. Los archivos de migración
+  anteriores (002/019/037) que mencionan `lista_precio`/`descuento_maximo`
+  en comentarios **no** se editaron — son registro histórico de lo que se
+  aplicó en su momento, no el estado actual (ese vive en `db/ESQUEMA.md`
+  y en este archivo).
+
+- **2026-08-10 (sesión aparte, mismo día) — RTB-ENT-01: `ventas` ya puede
+  solicitar cambios de RFC/razón social/tipo de persona (P05), contactos
+  editables, y modal de dirección que se cortaba por la pantalla,
+  corregido.** El dueño del proyecto notó que la tarjeta "Modificación
+  controlada (P05)" de la ficha de entidad no tenía ningún botón para
+  solicitar el cambio de esos 3 campos — ni siquiera `super_admin` tenía
+  uno. Investigando se encontró que `persona_tipo`, a diferencia de
+  `nombre_legal`/`rfc`, **no tenía ningún camino de escritura**: ni
+  `GRANT`, ni entrada en el enum `cambio_controlado`, ni campo en ningún
+  schema zod — un hueco real, no sólo de UI. Migración
+  `054_entidades_persona_tipo_cambio_controlado.sql` (sólo agrega el valor
+  al enum, sin split porque nada en la misma migración lo referencia) +
+  `REGLAS_APROBACION` (`lib/entidades/permisos.ts`) ampliada: `rfc` pasa
+  de `aprueba: null` (nadie podía aprobar, sólo `super_admin` ejecutaba
+  directo) a `inicia: [super_admin, ventas]` / `aprueba: [super_admin]`;
+  `razon_social` gana `ventas` en `inicia`; `persona_tipo` nace con
+  `inicia: [direccion, ventas]` / `aprueba: [super_admin]` — decisión
+  confirmada con el dueño del proyecto vía `AskUserQuestion`: mismo nivel
+  de severidad que ya tenía razón social, no el de límite de crédito
+  (`direccion`). Nueva tarjeta **"Información Fiscal"** (ya no
+  "Modificación controlada (P05)", con el párrafo bloqueante sustituido
+  por "Edición de datos bajo aprobación") con un lápiz por campo que
+  aparece sólo si el rol puede iniciar ese `tipo_cambio` — guarda directo
+  (`PATCH /api/entidades/[id]`) si `ejecutaDirecto`, o crea una
+  `solicitud_cambio` (mismo patrón ya usado por `limite_credito`) si no,
+  con motivo obligatorio y badge "Solicitud pendiente".
+
+  **Contactos** pasó de sólo-lectura a CRUD completo
+  (`ContactosCard`/`ContactoModal`, calcados 1:1 de
+  `DireccionesCard`/`DireccionModal` — el backend `GET/POST/PATCH
+  .../contactos` ya existía sin ningún consumidor de UI, mismo patrón que
+  direcciones antes de su propia sesión). Único matiz de negocio distinto:
+  `uq_contacto_principal_entidad` no discrimina por `tipo` como sí lo hace
+  el de direcciones — sólo puede haber UN contacto principal por entidad
+  completa, así que marcar uno nuevo como principal exige un PATCH previo
+  que desmarque al viejo (nunca al revés), verificado clic a clic con
+  `qa.ventas`: swap real entre dos contactos sin choque de índice único,
+  confirmado por SQL directo en ambos sentidos.
+
+  **Modal "Agregar dirección" cortado por la pantalla** (pedido explícito
+  del dueño del proyecto de revisarlo con la extensión de Chrome):
+  confirmado en vivo — con `flex items-center` + `overflow-y-auto` en el
+  overlay, cuando el contenido es más alto que el viewport el navegador
+  centra el modal y la mitad superior (título, botón cerrar, campo Tipo)
+  queda inalcanzable por scroll (no existe scroll negativo). Fix de una
+  línea (`items-center` → `items-start`) en `DireccionModal` — mismo
+  overlay que reutiliza `ContactoModal` nuevo — y aplicado también al
+  modal de bloqueo (`modalBloqueo`), que tenía el mismo bug latente aunque
+  su contenido corto rara vez lo mostrara. Polish menor: `MapaPunto` dentro
+  de `DireccionModal` bajó de `h-64` a `h-48` (`claseAltura`, prop que ya
+  existía en `MapaPuntoInner.tsx` sin usarse desde otras pantallas).
+
+  Verificado con SQL simulando rol real (`ventas` inserta una solicitud de
+  `persona_tipo` con el enum nuevo, `BEGIN/ROLLBACK`), `get_advisors` sin
+  `ERROR` nuevo, `docker build --target builder` limpio, y clic a clic
+  real end-to-end con `qa.ventas`/`qa.superadmin` sobre `QA Cliente Uno`:
+  solicitud de RFC creada y visible en `/dashboard/solicitudes`, aprobada
+  por `super_admin` con el RFC cambiando de verdad en la ficha; contacto
+  nuevo agregado, editado, y promovido a principal con democión automática
+  del anterior; modal de dirección confirmado sin corte. Los datos de
+  prueba (RFC, contacto nuevo, principal) se revirtieron a su estado
+  original tras verificar — a diferencia de otras campañas QA de este
+  repo, aquí no aportaban valor como evidencia adicional una vez
+  confirmado el mecanismo. Nota operativa: el `archivar()` de contactos
+  usa `confirm()` nativo del navegador — la extensión Claude in Chrome se
+  queda sin respuesta un momento tras dispararlo (limitación conocida de
+  la extensión, no del código); el archivado en sí se aplicó igual, sólo
+  se retrasó la confirmación visual en el navegador automatizado.
+
+- **2026-08-10 (sesión aparte, concurrente con la de arriba) — RTB-ENT-01:
+  leyenda siempre visible del umbral de crédito, interfaz de propuesta
+  faltante para `condicion_proveedor`, y búsqueda/filtros en
+  `/dashboard/solicitudes`.** Pedido del dueño del proyecto en dos pasos,
+  tras dar de alta un cliente él mismo con `super_admin` y notar que el
+  aviso de aprobación de crédito sólo aparecía **después** de teclear una
+  cifra sobre el umbral, no antes.
+
+  **Paso 1 — leyenda siempre visible.** Componente nuevo
+  `<AvisoLimiteCredito>` (`components/entidades/aviso-credito.tsx`),
+  reemplaza los dos avisos condicionales copiados (alta y edición de
+  cliente): se ve desde que aparece el campo, con cuatro textos según dos
+  ejes (¿supera $100,000? × ¿el rol que lee ejecuta directo?) — antes decía
+  "quedará pendiente de aprobación de dirección" incluso a `super_admin`,
+  que en realidad la aplica directo (`ejecutaDirecto()`, la misma función
+  que ya deciden las rutas de API, nunca una copia paralela). De paso,
+  `nueva/page.tsx` corrigió su propio cálculo de `requiereAprobacion`
+  (no consultaba `ejecutaDirecto`, sólo el umbral).
+
+  **Paso 2 — auditoría de "¿cuáles de los 8 cambios controlados ya tienen
+  interfaz de aprobar/rechazar?".** El lado de **aprobar/rechazar** ya era
+  uno solo, genérico, y cubría los 8 desde `/dashboard/solicitudes` (decide
+  con `REGLAS_APROBACION[tipo].aprueba` en el servidor, no por pantalla
+  dedicada por tipo). El lado de **proponer** tenía un hueco real:
+  `condicion_proveedor` (categoría + condición de pago de un proveedor) no
+  tenía ningún camino de escritura desde la UI — la tarjeta "Condiciones
+  comerciales · Proveedor" era de sólo lectura, sin lápiz ni ruta, aunque
+  el resolver ya sabía aplicarlo (`CAMPOS_PERMITIDOS.condicion_proveedor`)
+  y la regla de negocio ya estaba declarada en `REGLAS_APROBACION` desde el
+  origen del módulo — inalcanzable, no ausente. Confirmado a nivel de base
+  de datos que es un cambio controlado real: `categoria`/`condicion_pago`
+  nunca tuvieron `GRANT UPDATE` para `authenticated`
+  (`015_catalogo_marcas_y_gobierno.sql`).
+
+  Cerrado con `PATCH /api/entidades/[id]/proveedor` (ruta nueva, mismo
+  patrón dual que `.../cliente` de `limite_credito`: `compras` propone,
+  `super_admin` aplica directo con el cliente admin) y **`CampoP05Multi`**
+  — variante nueva de `CampoP05` (el patrón ya usado para rfc/razón social/
+  tipo de persona) para un cambio controlado que cubre **dos** columnas a
+  la vez en una sola solicitud; `CampoP05` original no se tocó, sus 3 usos
+  de un solo campo siguen iguales. Al verificar clic a clic salió un bug
+  real no relacionado con la ruta nueva: el Server Component de la ficha de
+  entidad (`entidades/[id]/page.tsx`) nunca incluía `tabla='proveedores'`
+  al construir el filtro de `solicitudesPendientes` — mismo defecto ya
+  conocido y corregido una vez para `tabla='clientes'` (el comentario que
+  documentaba ese fix seguía en el archivo, sin la rama nueva). Sin
+  corregirlo, "Solicitud pendiente" nunca se habría mostrado para
+  `condicion_proveedor` aunque la solicitud existiera y fuera resoluble.
+
+  **Paso 3 — búsqueda/filtros + ocultar el botón según permiso real**, a
+  petición explícita del dueño del proyecto una vez visto el resultado del
+  paso 2. `/dashboard/solicitudes` ganó: búsqueda de texto (entidad/RFC/
+  siglas/motivo), filtro de tipo de cambio, rango de fechas
+  (`<RangoFechas>`, primer uso fuera de Ventas), "Sólo mías", columna
+  **Solicitante** (`usuarios_directorio()`, RPC ya usado en Ventas/
+  Inventario para lo mismo), y paginación convergida a `<Paginacion>`
+  (ya señalada como pendiente en el comentario del propio componente).
+  Módulo nuevo `lib/entidades/listado-solicitudes.ts` (mismo pivote
+  anti-duplicación que `lib/ventas/listado-cotizaciones.ts`, pero **sin**
+  importar de `lib/ventas/*` — esa dirección de dependencia iría al revés
+  de como está diseñado el repo; `valorLike`/`diaSiguiente` se duplican en
+  4 líneas cada uno en vez de cruzar el import). La búsqueda de texto
+  resuelve en dos pasos porque `registro_id` es polimórfico: `ilike` sobre
+  `entidades` → ids, luego `clientes`/`proveedores` cuyo `entidad_id` esté
+  en ese resultado → sus propios ids, `.or()` final con
+  `and(tabla.eq.X,registro_id.in.(...))` por tabla más `motivo.ilike`.
+
+  Al ver la bandeja con los 8 tipos mezclados salió una segunda petición:
+  `direccion` veía el botón "Aprobar" en los 5 tipos que sólo `super_admin`
+  resuelve (`rfc`/`razon_social`/`persona_tipo`/`reactivacion`/
+  `bloqueo_temporal`) y se llevaba un `403` real al intentarlo. Corregido
+  espejando en cliente la misma regla que ya aplicaba el servidor
+  (`REGLAS_APROBACION[tipo].aprueba?.includes(role)`) — si no coincide, la
+  celda muestra **"Sólo lectura — aprueba `<rol>`"** en vez del botón. El
+  servidor sigue siendo la barrera real; esto sólo evita el viaje redondo
+  que iba a fallar.
+
+  Verificado end-to-end con usuarios QA reales, nunca la cuenta del dueño
+  del proyecto: `qa.compras` propone condición de proveedor → aparece en la
+  bandeja con búsqueda/filtro/solicitante correctos → `qa.direccion`
+  aprueba → cambio confirmado en `proveedores` por SQL directo;
+  `qa.superadmin` (nota: el correo real de ese usuario QA es
+  `qa.superadmin@qa.refacrtb.mx`, sin guion bajo, a diferencia del patrón
+  `qa.<rol>` del resto) aplica el mismo cambio directo, sin solicitud,
+  también confirmado por SQL; `qa.ventas` propuso una razón social →
+  `qa.direccion` la vio como "Sólo lectura — aprueba Super Admin" (sin
+  botones) → `qa.superadmin` sí los vio y aprobó. Confirmado además por
+  `information_schema.column_privileges` que `categoria`/`condicion_pago`
+  siguen sin `UPDATE` para `authenticated` (sólo `INSERT`/`SELECT`) — la
+  ruta nueva no abrió ningún hueco de privilegio. `tsc --noEmit` limpio en
+  cada paso, `get_advisors` sin `ERROR` nuevo (sin migración SQL en esta
+  sesión). Sesión concurrente en el mismo repositorio (persona_tipo/
+  contactos/lista_precio arriba, y trabajo de código de barras autogenerado
+  en Productos) — se verificó `tsc --noEmit` limpio sobre el estado
+  combinado antes de dar por cerrada la sesión.
+
+  **Hallazgo aparte, dejado en TODO a petición del dueño del proyecto:**
+  revisando el alta de productos (`/dashboard/productos/nuevo`) para
+  contestar por qué un producto dado de alta con `super_admin` quedaba en
+  `estado='borrador'`, se confirmó que **no existe ningún camino, para
+  ningún rol, que lo pase a `'activo'`** — ni UI, ni ruta de API con
+  `service_role`, ni trigger. La columna ni siquiera está en el `GRANT
+  UPDATE` de `productos` para `authenticated`. La spec del módulo nunca
+  incluyó ese paso entre sus cambios controlados. Detalle completo,
+  incluida la verificación capa por capa, en
+  `db/procesos/alta-producto.md` y en el TODO de abajo.
+
 ## TODO
 
+- **RTB-INV-01 — ningún rol puede activar un producto (`borrador →
+  activo`).** Confirmado 2026-08-10 revisando el alta de productos a
+  pedido del dueño del proyecto (ver Historial de decisiones, misma
+  fecha, y `db/procesos/alta-producto.md`): el formulario de alta nunca
+  pide `estado` (queda en `'borrador'` por `default` del schema, siempre),
+  `productos.estado` no tiene `GRANT UPDATE` para `authenticated`, ninguna
+  de las 6 rutas de `/api/productos/**` la escribe con `service_role`, y
+  la UI sólo la muestra con un badge de sólo lectura. La spec del módulo
+  (`contexto/RTB-INV-01_Modulo_Productos_Inventario.md` §4) nunca incluyó
+  "activar un producto" entre sus cambios controlados — el paso nunca se
+  diseñó, no es sólo que falte construirlo. Pendiente: decidir con el
+  dueño del proyecto quién activa (¿libre para `super_admin`/`direccion`?
+  ¿exige costo y unidad ya capturados?) antes de construir la ruta/botón.
 - **MailerSend sin webhook.** `ventas_cotizacion_envios.resultado='exitoso'`
   significa que el proveedor ACEPTÓ el envío (HTTP 202), no que el cliente
   lo recibió — un rebote posterior no queda reflejado. Si eso llega a
@@ -1757,7 +1988,7 @@ contra Supabase — ver TODO.
   criterio viejo sin repreguntarlo.
 - **`gerente_comercial` en `clientes_update` (037), punto más probable de
   revisión.** Incluir a `gerente_comercial` en esa política le da
-  autoridad sobre `limite_credito`/`descuento_maximo`/`vendedor_id` (ya
+  autoridad sobre `limite_credito`/`descuento_base`/`vendedor_id` (ya
   expuestas por el `GRANT` de columna existente) — se incluyó porque
   `ventas` ya la tiene y no separar esas columnas fue la decisión más
   rápida, no necesariamente la más fina. Si el dueño del proyecto quiere

@@ -82,6 +82,7 @@ export function puede(rol: UserRole | null | undefined, recurso: RecursoEntidade
 export type CambioControlado =
   | 'rfc'
   | 'razon_social'
+  | 'persona_tipo'
   | 'limite_credito'
   | 'condicion_proveedor'
   | 'reactivacion'
@@ -96,8 +97,14 @@ interface ReglaAprobacion {
 }
 
 export const REGLAS_APROBACION: Record<CambioControlado, ReglaAprobacion> = {
-  rfc: { inicia: ['super_admin'], aprueba: null },
-  razon_social: { inicia: ['direccion'], aprueba: ['super_admin'] },
+  // 2026-08-10: 'ventas' se agregó a rfc/razon_social (antes sólo
+  // super_admin/direccion podían siquiera iniciarlos) y persona_tipo nace
+  // como entrada nueva — las tres las aprueba super_admin, mismo criterio
+  // que ya tenía razon_social (decisión confirmada con el dueño del
+  // proyecto: mismo nivel de severidad que la identidad fiscal/legal).
+  rfc: { inicia: ['super_admin', 'ventas'], aprueba: ['super_admin'] },
+  razon_social: { inicia: ['direccion', 'ventas'], aprueba: ['super_admin'] },
+  persona_tipo: { inicia: ['direccion', 'ventas'], aprueba: ['super_admin'] },
   limite_credito: { inicia: ['ventas'], aprueba: ['direccion'] },
   condicion_proveedor: { inicia: ['compras'], aprueba: ['direccion'] },
   reactivacion: { inicia: ['direccion'], aprueba: ['super_admin'] },

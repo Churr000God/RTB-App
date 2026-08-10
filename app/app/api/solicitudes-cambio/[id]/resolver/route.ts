@@ -15,6 +15,7 @@ import { clientIp, clientUserAgent } from '@/lib/entidades/http';
 const CAMPOS_PERMITIDOS: Partial<Record<CambioControlado, string[]>> = {
   rfc: ['rfc'],
   razon_social: ['nombre_legal'],
+  persona_tipo: ['persona_tipo'],
   limite_credito: ['limite_credito'],
   condicion_proveedor: ['categoria', 'condicion_pago'],
 };

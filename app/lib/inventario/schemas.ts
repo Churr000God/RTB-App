@@ -105,7 +105,6 @@ export const productoCreateSchema = z
     marca_id: z.string().uuid().optional().nullable(),
     modelo: z.string().trim().max(120).optional().nullable(),
     categoria_id: z.string().uuid().optional().nullable(),
-    codigo_barras: z.string().trim().max(60).optional().nullable(),
     unidad_medida_id: z.string().uuid('Selecciona la unidad de medida base'),
     contenido_por_unidad: z.coerce.number().positive().default(1),
     unidad_contenido_id: z.string().uuid().optional().nullable(),
@@ -133,7 +132,9 @@ export const productoCreateSchema = z
  *  estado/unidad_medida_id/contenido_por_unidad/stock_minimo/stock_maximo/
  *  es_estrategico NO están: identidad, ciclo de vida y la causa #1 de
  *  pérdida sólo cambian vía API con service_role o vía
- *  producto_unidad_redefiniciones (013). */
+ *  producto_unidad_redefiniciones (013). codigo_barras tampoco está desde
+ *  055: se autogenera al alta (= codigo_interno) y queda fijo para
+ *  siempre, ni super_admin lo edita después. */
 export const productoUpdateLibreSchema = z
   .object({
     nombre: z.string().trim().min(2).max(200).optional(),
@@ -141,7 +142,6 @@ export const productoUpdateLibreSchema = z
     marca_id: z.string().uuid().optional().nullable(),
     modelo: z.string().trim().max(120).optional().nullable(),
     categoria_id: z.string().uuid().optional().nullable(),
-    codigo_barras: z.string().trim().max(60).optional().nullable(),
     requiere_ubicacion: z.boolean().optional(),
     observaciones: z.string().trim().max(4000).optional().nullable(),
   })

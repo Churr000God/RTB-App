@@ -60,16 +60,26 @@ dos clases de cambio:
   de `/dashboard/entidades` junto a razón social/clave/RFC, y alimenta el
   avatar del detalle cuando existe (si no, se calculan iniciales de la
   razón social).
-- **Controlada** (`nombre_legal`/`rfc`): sólo `super_admin` puede tocarlos
-  directo desde esta misma ruta (usa el cliente admin, porque esas dos
-  columnas no tienen `GRANT UPDATE` para `authenticated`). Cualquier otro rol
-  recibe `403` con el mensaje "requiere una solicitud de cambio aprobada" —
-  debe pasar por `POST /api/solicitudes-cambio` (ver
-  `bloqueo-y-aprobaciones.md`).
+- **Controlada** (`nombre_legal`/`rfc`/`persona_tipo`): sólo `super_admin`
+  puede tocarlos directo desde esta misma ruta (usa el cliente admin, porque
+  esas columnas no tienen `GRANT UPDATE` para `authenticated`). Cualquier
+  otro rol con acceso (`direccion`/`ventas`, según el campo — ver la tabla
+  de `bloqueo-y-aprobaciones.md`) recibe `403` con el mensaje "requiere una
+  solicitud de cambio aprobada" al intentarlo por aquí — la vía real para
+  ellos es la tarjeta "Información Fiscal" de la ficha de entidad, que crea
+  la solicitud por `POST /api/solicitudes-cambio`.
 
-`clientes.limite_credito` sigue la misma lógica pero vive en otra tabla: no
-tiene `GRANT UPDATE` para nadie salvo `service_role`; el cambio > $100,000
-exige una solicitud aprobada por `direccion`.
+`clientes.limite_credito` sigue la misma lógica pero vive en otra tabla, con
+su propia ruta dedicada (`PATCH /api/entidades/[id]/cliente`, no la genérica
+de arriba): no tiene `GRANT UPDATE` para nadie salvo `service_role`; el
+cambio > $100,000 exige una solicitud aprobada por `direccion`. Desde
+2026-08-10 esa regla se explica siempre en pantalla, no sólo cuando ya se
+superó el umbral — `<AvisoLimiteCredito>`
+(`components/entidades/aviso-credito.tsx`) muestra la leyenda apenas
+aparece el campo (alta y edición), con el texto ajustado según si el rol
+que la lee ejecuta directo (`super_admin`) o necesita aprobación
+(`ventas`/`direccion`) — antes decía "quedará pendiente de aprobación" para
+todos, inexacto para `super_admin`.
 
 ## Contactos y direcciones — modificación libre real
 

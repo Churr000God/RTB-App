@@ -71,8 +71,7 @@ export const clienteDatosSchema = z.object({
   limite_credito: z.coerce.number().min(0).default(0),
   dias_credito: z.coerce.number().int().min(0).default(0),
   dias_gracia: z.coerce.number().int().min(0).default(0),
-  lista_precio: z.string().trim().max(50).optional().nullable(),
-  descuento_maximo: z.coerce.number().min(0).max(100).default(0),
+  descuento_base: z.coerce.number().min(0).max(100).default(0),
   vendedor_id: z.string().uuid().optional().nullable(),
   canal_origen: z.enum(CANAL_ORIGENES).optional().nullable(),
 });
@@ -254,6 +253,7 @@ export const SOLICITUD_TABLAS = ['entidades', 'clientes', 'proveedores'] as cons
 export const CAMBIOS_CONTROLADOS = [
   'rfc',
   'razon_social',
+  'persona_tipo',
   'limite_credito',
   'condicion_proveedor',
   'reactivacion',

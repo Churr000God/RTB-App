@@ -5,15 +5,18 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/rbac/hooks';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
-import { puede } from '@/lib/entidades/permisos';
+import { puede, ejecutaDirecto, REGLAS_APROBACION } from '@/lib/entidades/permisos';
+import type { CambioControlado } from '@/lib/entidades/permisos';
+import type { UserRole } from '@/types/database';
 import {
   CONDICION_PAGO_LABELS,
+  CONTACTO_TIPO_LABELS,
   DIRECCION_TIPO_LABELS,
   ENTIDAD_TIPO_LABELS,
   PERSONA_TIPO_LABELS,
-  UMBRAL_APROBACION_CREDITO,
 } from '@/lib/entidades/config';
 import { EntidadEstadoBadge } from '@/components/entidades/estado-badge';
+import { AvisoLimiteCredito } from '@/components/entidades/aviso-credito';
 import { CarteraComercialTab } from '@/components/ventas/cartera-comercial-tab';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,11 +26,12 @@ import MapaPunto from '@/components/mapas/MapaPunto';
 import { CampoCoordenada } from '@/components/mapas/CampoCoordenada';
 import { PropuestaDireccion } from '@/components/mapas/PropuestaDireccion';
 import type { DireccionGeocodificada } from '@/lib/mapas/schemas';
-import { DIRECCION_TIPOS } from '@/types/entidades';
+import { CONDICION_PAGOS, CONTACTO_TIPOS, DIRECCION_TIPOS, PERSONA_TIPOS } from '@/types/entidades';
 import type {
   AuditLogEntry,
   Cliente,
   Contacto,
+  ContactoTipo,
   Direccion,
   DireccionTipo,
   Entidad,
@@ -206,14 +210,7 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <DatosGeneralesCard entidad={entidad} puedeEditar={puede(role, 'entidades', 'update')} />
 
-            <Card titulo="Modificación controlada (P05)">
-              <Dato label="Tipo de persona" valor={PERSONA_TIPO_LABELS[entidad.persona_tipo]} />
-              <Dato label="Razón social" valor={entidad.nombre_legal} />
-              <Dato label="RFC" valor={entidad.rfc ?? '—'} />
-              <p className="text-xs text-muted-foreground pt-1">
-                Estos tres campos requieren una solicitud de cambio aprobada (P05), no se editan directo.
-              </p>
-            </Card>
+            <InformacionFiscalCard entidad={entidad} role={role} solicitudesPendientes={solicitudesPendientes} />
 
             {cliente && (
               <Card titulo="Condiciones comerciales · Cliente">
@@ -238,11 +235,7 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
                       placeholder="Nuevo límite"
                       className="w-full text-sm border border-border rounded-lg px-2 py-1.5 tabular-nums"
                     />
-                    {Number(nuevoLimite) > UMBRAL_APROBACION_CREDITO && (
-                      <p className="text-[11px] text-accent">
-                        Supera ${UMBRAL_APROBACION_CREDITO.toLocaleString('es-MX')} — quedará pendiente de aprobación de dirección.
-                      </p>
-                    )}
+                    <AvisoLimiteCredito role={role} limite={Number(nuevoLimite) || 0} compacto />
                     {creditoError && <p className="text-[11px] text-destructive">{creditoError}</p>}
                     <div className="flex justify-end gap-2">
                       <Button
@@ -268,16 +261,30 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
                   </p>
                 )}
                 <Dato label="Días de crédito" valor={String(cliente.dias_credito)} />
-                <Dato label="Descuento base" valor={`${cliente.descuento_maximo}%`} />
-                <Dato label="Lista de precios" valor={cliente.lista_precio ?? '—'} />
+                <Dato label="Descuento base" valor={`${cliente.descuento_base}%`} />
               </Card>
             )}
 
             {proveedor && (
               <Card titulo="Condiciones comerciales · Proveedor">
-                <Dato label="Categoría" valor={proveedor.categoria ?? '—'} />
+                <CampoP05Multi
+                  entidadId={entidad.id}
+                  tipoCambio="condicion_proveedor"
+                  campos={[
+                    { columna: 'categoria', label: 'Categoría', valorInicial: proveedor.categoria ?? '' },
+                    {
+                      columna: 'condicion_pago',
+                      label: 'Condición de pago',
+                      valorInicial: proveedor.condicion_pago,
+                      opciones: CONDICION_PAGOS.map((c) => ({ value: c, label: CONDICION_PAGO_LABELS[c] })),
+                    },
+                  ]}
+                  role={role}
+                  solicitudPendiente={solicitudesPendientes.find(
+                    (s) => s.tabla === 'proveedores' && s.tipo_cambio === 'condicion_proveedor'
+                  )}
+                />
                 <Dato label="Plazo de pago" valor={`${proveedor.plazo_pago} días`} />
-                <Dato label="Condición de pago" valor={CONDICION_PAGO_LABELS[proveedor.condicion_pago]} />
                 <Dato label="Moneda" valor={proveedor.moneda_default} />
               </Card>
             )}
@@ -286,19 +293,7 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
 
         <TabsContent value="contactos" className="space-y-4 mt-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card titulo="Contactos">
-              {contactos.length === 0 && <p className="text-sm text-muted-foreground">Sin contactos registrados.</p>}
-              {contactos.map((c) => (
-                <div key={c.id} className="text-sm py-2 border-b border-border/50 last:border-0">
-                  <p className="font-medium text-rtb-navy">
-                    {c.nombre} {c.es_principal && <span className="text-[10px] text-rtb-teal ml-1">PRINCIPAL</span>}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {c.cargo ?? '—'} · {c.telefono ?? '—'} · {c.correo ?? '—'}
-                  </p>
-                </div>
-              ))}
-            </Card>
+            <ContactosCard entidadId={entidad.id} contactos={contactos} />
             <DireccionesCard entidadId={entidad.id} direcciones={direcciones} />
           </div>
         </TabsContent>
@@ -326,7 +321,7 @@ export function EntidadDetalle({ entidad, cliente, proveedor, contactos, direcci
       </Tabs>
 
       {modalBloqueo && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl w-full max-w-md p-6" style={{ boxShadow: 'var(--shadow-lg)' }}>
             <h2 className="text-lg font-display font-semibold text-rtb-navy mb-1">
               {modalBloqueo === 'desbloquear'
@@ -525,6 +520,372 @@ function Dato({ label, valor }: { label: string; valor: string }) {
     <div className="flex justify-between text-sm py-1">
       <span className="text-muted-foreground">{label}</span>
       <span className="text-rtb-navy font-medium text-right">{valor}</span>
+    </div>
+  );
+}
+
+// Antes esta tarjeta ("Modificación controlada (P05)") era de sólo lectura:
+// tipo_persona/nombre_legal/rfc se mostraban con un mensaje diciendo que
+// requerían una solicitud aprobada, pero ningún rol —ni siquiera
+// super_admin— tenía un botón para levantarla desde aquí. persona_tipo
+// además no tenía NINGÚN camino de escritura (ni GRANT, ni entrada en el
+// enum cambio_controlado, ni campo en ningún schema) — 2026-08-10,
+// 054_entidades_persona_tipo_cambio_controlado.sql lo agrega al mismo
+// mecanismo que ya usaban rfc/razón social.
+function InformacionFiscalCard({
+  entidad,
+  role,
+  solicitudesPendientes,
+}: {
+  entidad: Entidad;
+  role: UserRole | null;
+  solicitudesPendientes: SolicitudCambio[];
+}) {
+  const solicitudPara = (tipo: CambioControlado) =>
+    solicitudesPendientes.find((s) => s.tabla === 'entidades' && s.tipo_cambio === tipo);
+
+  return (
+    <Card titulo="Información Fiscal">
+      <CampoP05
+        entidadId={entidad.id}
+        tipoCambio="persona_tipo"
+        columna="persona_tipo"
+        label="Tipo de persona"
+        valorMostrar={PERSONA_TIPO_LABELS[entidad.persona_tipo]}
+        valorInicial={entidad.persona_tipo}
+        role={role}
+        solicitudPendiente={solicitudPara('persona_tipo')}
+        opciones={PERSONA_TIPOS.map((p) => ({ value: p, label: PERSONA_TIPO_LABELS[p] }))}
+      />
+      <CampoP05
+        entidadId={entidad.id}
+        tipoCambio="razon_social"
+        columna="nombre_legal"
+        label="Razón social"
+        valorMostrar={entidad.nombre_legal}
+        valorInicial={entidad.nombre_legal}
+        role={role}
+        solicitudPendiente={solicitudPara('razon_social')}
+      />
+      <CampoP05
+        entidadId={entidad.id}
+        tipoCambio="rfc"
+        columna="rfc"
+        label="RFC"
+        valorMostrar={entidad.rfc ?? '—'}
+        valorInicial={entidad.rfc ?? ''}
+        role={role}
+        solicitudPendiente={solicitudPara('rfc')}
+        mayusculas
+      />
+      <p className="text-xs text-muted-foreground pt-1">Edición de datos bajo aprobación.</p>
+    </Card>
+  );
+}
+
+function CampoP05({
+  entidadId,
+  tipoCambio,
+  columna,
+  label,
+  valorMostrar,
+  valorInicial,
+  role,
+  solicitudPendiente,
+  opciones,
+  mayusculas,
+}: {
+  entidadId: string;
+  tipoCambio: CambioControlado;
+  columna: string;
+  label: string;
+  valorMostrar: string;
+  valorInicial: string;
+  role: UserRole | null;
+  solicitudPendiente?: SolicitudCambio;
+  opciones?: { value: string; label: string }[];
+  mayusculas?: boolean;
+}) {
+  const router = useRouter();
+  const [editando, setEditando] = useState(false);
+  const [valor, setValor] = useState(valorInicial);
+  const [motivo, setMotivo] = useState(`Corrección de ${label.toLowerCase()}`);
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  // super_admin siempre ejecuta directo (ejecutaDirecto); el resto de roles
+  // que figuran como 'inicia' para este tipo_cambio ven el lápiz, pero su
+  // guardado crea una solicitud pendiente en vez de escribir directo.
+  const directo = ejecutaDirecto(tipoCambio, role);
+  const puedeIniciar = directo || (role ? REGLAS_APROBACION[tipoCambio].inicia.includes(role) : false);
+
+  const cancelar = () => {
+    setEditando(false);
+    setError(null);
+    setValor(valorInicial);
+  };
+
+  const guardar = async () => {
+    if (!valor.trim()) {
+      setError('El valor no puede quedar vacío.');
+      return;
+    }
+    setError(null);
+    setEnviando(true);
+
+    if (directo) {
+      const res = await fetch(`/api/entidades/${entidadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [columna]: valor }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setEnviando(false);
+      if (!res.ok) {
+        setError(data?.error ?? 'No se pudo guardar el cambio.');
+        return;
+      }
+      setEditando(false);
+      router.refresh();
+      return;
+    }
+
+    if (motivo.trim().length < 5) {
+      setEnviando(false);
+      setError('El motivo debe tener al menos 5 caracteres.');
+      return;
+    }
+    const res = await fetch('/api/solicitudes-cambio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tabla: 'entidades',
+        registro_id: entidadId,
+        tipo_cambio: tipoCambio,
+        cambios: { [columna]: valor },
+        motivo,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setEnviando(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo enviar la solicitud.');
+      return;
+    }
+    setEditando(false);
+    router.refresh();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm py-1">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-rtb-navy font-medium text-right">{valorMostrar}</span>
+          {puedeIniciar && !editando && (
+            <button type="button" onClick={() => setEditando(true)} className="text-rtb-teal">
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </span>
+      </div>
+      {editando && (
+        <div className="p-2 bg-rtb-surface/60 rounded-lg space-y-2 mb-1">
+          {opciones ? (
+            <select
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              className="w-full text-sm border border-border rounded-lg px-2 py-1.5"
+            >
+              {opciones.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={valor}
+              onChange={(e) => setValor(mayusculas ? e.target.value.toUpperCase() : e.target.value)}
+              className="w-full text-sm border border-border rounded-lg px-2 py-1.5 tabular-nums"
+            />
+          )}
+          {!directo && (
+            <textarea
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              placeholder="Motivo del cambio (obligatorio)"
+              className="w-full text-xs border border-border rounded-lg px-2 py-1.5 min-h-[50px]"
+            />
+          )}
+          {error && <p className="text-[11px] text-destructive">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={cancelar}>
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={guardar} disabled={enviando}>
+              {directo ? 'Guardar' : 'Enviar solicitud'}
+            </Button>
+          </div>
+        </div>
+      )}
+      {solicitudPendiente && (
+        <p className="text-[11px] text-accent">
+          Solicitud pendiente:{' '}
+          {opciones
+            ? (opciones.find((o) => o.value === String((solicitudPendiente.cambios as Record<string, unknown>)[columna]))
+                ?.label ?? '—')
+            : String((solicitudPendiente.cambios as Record<string, unknown>)[columna] ?? '')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface CampoP05MultiCampo {
+  columna: string;
+  label: string;
+  valorInicial: string;
+  opciones?: { value: string; label: string }[];
+}
+
+// Variante de CampoP05 para un cambio controlado que cubre VARIAS columnas
+// a la vez en una sola solicitud (condicion_proveedor: categoria +
+// condicion_pago juntas — CAMPOS_PERMITIDOS del resolver ya las trata como
+// una unidad). CampoP05 no se toca: sus 3 usos de una sola columna
+// (persona_tipo/razón social/rfc) siguen igual. A diferencia de CampoP05,
+// que en la rama directa reutiliza el PATCH genérico de /api/entidades/[id]
+// (ese sólo escribe columnas de la tabla `entidades`), aquí no hay ruta
+// genérica para `proveedores` — categoria/condicion_pago no tienen GRANT de
+// columna (002_entidades_core.sql) — así que ambas ramas van a la ruta
+// dedicada PATCH /api/entidades/[id]/proveedor.
+function CampoP05Multi({
+  entidadId,
+  tipoCambio,
+  campos,
+  role,
+  solicitudPendiente,
+}: {
+  entidadId: string;
+  tipoCambio: CambioControlado;
+  campos: CampoP05MultiCampo[];
+  role: UserRole | null;
+  solicitudPendiente?: SolicitudCambio;
+}) {
+  const router = useRouter();
+  const [editando, setEditando] = useState(false);
+  const [valores, setValores] = useState<Record<string, string>>(
+    Object.fromEntries(campos.map((c) => [c.columna, c.valorInicial]))
+  );
+  const [motivo, setMotivo] = useState('Corrección de condición de proveedor');
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const directo = ejecutaDirecto(tipoCambio, role);
+  const puedeIniciar = directo || (role ? REGLAS_APROBACION[tipoCambio].inicia.includes(role) : false);
+
+  const cancelar = () => {
+    setEditando(false);
+    setError(null);
+    setValores(Object.fromEntries(campos.map((c) => [c.columna, c.valorInicial])));
+  };
+
+  const guardar = async () => {
+    setError(null);
+    if (!directo && motivo.trim().length < 5) {
+      setError('El motivo debe tener al menos 5 caracteres.');
+      return;
+    }
+    setEnviando(true);
+    const res = await fetch(`/api/entidades/${entidadId}/proveedor`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...valores, motivo: directo ? undefined : motivo }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setEnviando(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo guardar el cambio.');
+      return;
+    }
+    setEditando(false);
+    router.refresh();
+  };
+
+  return (
+    <div>
+      {campos.map((c) => (
+        <div key={c.columna} className="flex items-center justify-between text-sm py-1">
+          <span className="text-muted-foreground">{c.label}</span>
+          <span className="flex items-center gap-1.5">
+            <span className="text-rtb-navy font-medium text-right">
+              {c.opciones ? (c.opciones.find((o) => o.value === c.valorInicial)?.label ?? '—') : c.valorInicial || '—'}
+            </span>
+            {puedeIniciar && !editando && c === campos[0] && (
+              <button type="button" onClick={() => setEditando(true)} className="text-rtb-teal">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </span>
+        </div>
+      ))}
+      {editando && (
+        <div className="p-2 bg-rtb-surface/60 rounded-lg space-y-2 mb-1">
+          {campos.map((c) => (
+            <div key={c.columna}>
+              <label className="text-[11px] text-muted-foreground">{c.label}</label>
+              {c.opciones ? (
+                <select
+                  value={valores[c.columna]}
+                  onChange={(e) => setValores((v) => ({ ...v, [c.columna]: e.target.value }))}
+                  className="w-full text-sm border border-border rounded-lg px-2 py-1.5"
+                >
+                  {c.opciones.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={valores[c.columna]}
+                  onChange={(e) => setValores((v) => ({ ...v, [c.columna]: e.target.value }))}
+                  className="w-full text-sm border border-border rounded-lg px-2 py-1.5"
+                />
+              )}
+            </div>
+          ))}
+          {!directo && (
+            <textarea
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              placeholder="Motivo del cambio (obligatorio)"
+              className="w-full text-xs border border-border rounded-lg px-2 py-1.5 min-h-[50px]"
+            />
+          )}
+          {error && <p className="text-[11px] text-destructive">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={cancelar}>
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={guardar} disabled={enviando}>
+              {directo ? 'Guardar' : 'Enviar solicitud'}
+            </Button>
+          </div>
+        </div>
+      )}
+      {solicitudPendiente && (
+        <p className="text-[11px] text-accent">
+          Solicitud pendiente:{' '}
+          {campos
+            .map((c) => {
+              const v = String((solicitudPendiente.cambios as Record<string, unknown>)[c.columna] ?? '');
+              const etiqueta = c.opciones ? (c.opciones.find((o) => o.value === v)?.label ?? v) : v;
+              return `${c.label}: ${etiqueta}`;
+            })
+            .join(' · ')}
+        </p>
+      )}
     </div>
   );
 }
@@ -728,7 +1089,7 @@ function DireccionModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center p-4 overflow-y-auto">
       <div className="bg-white rounded-xl w-full max-w-2xl p-6 my-8" style={{ boxShadow: 'var(--shadow-lg)' }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-display font-semibold text-rtb-navy">
@@ -831,6 +1192,7 @@ function DireccionModal({
               latitud={form.latitud ? Number(form.latitud) : null}
               longitud={form.longitud ? Number(form.longitud) : null}
               editable
+              claseAltura="h-48"
               onCoordenadaChange={(lat, lng) =>
                 setForm((f) => ({ ...f, latitud: lat.toFixed(7), longitud: lng.toFixed(7) }))
               }
@@ -870,6 +1232,265 @@ function CampoModal({
         {requerido && <span className="text-destructive ml-0.5">*</span>}
       </Label>
       <div className="mt-1">{children}</div>
+    </div>
+  );
+}
+
+// Antes esta card era sólo lectura (mismo defecto que direcciones tenía
+// antes de la sección de arriba) aunque GET/POST/PATCH .../contactos ya
+// existían — nadie los llamaba desde ninguna pantalla. Calcada de
+// DireccionesCard/DireccionModal, sin el bloque de mapa. El índice único
+// uq_contacto_principal_entidad (002_entidades_core.sql) no discrimina por
+// `tipo` como sí lo hace el de direcciones — sólo puede haber UN principal
+// por entidad, así que marcar uno nuevo exige desmarcar el viejo primero
+// (PATCH secuencial, nunca al revés — mismo orden "demover-then-promover"
+// ya documentado para producto_imagenes).
+function ContactosCard({ entidadId, contactos }: { entidadId: string; contactos: Contacto[] }) {
+  const { role } = useAuth();
+  const router = useRouter();
+  const [modal, setModal] = useState<{ modo: 'crear' } | { modo: 'editar'; contacto: Contacto } | null>(null);
+  const [archivando, setArchivando] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const puedeEscribir = puede(role, 'contactos', 'insert');
+  const principalActual = contactos.find((c) => c.es_principal) ?? null;
+
+  const archivar = async (contacto: Contacto) => {
+    if (!confirm(`¿Archivar a "${contacto.nombre}"? No se borra (P05: "no borrado físico"), sólo deja de aparecer aquí.`)) {
+      return;
+    }
+    setArchivando(contacto.id);
+    setError(null);
+    const res = await fetch(`/api/entidades/${entidadId}/contactos/${contacto.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activo: false }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setArchivando(null);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo archivar el contacto.');
+      return;
+    }
+    router.refresh();
+  };
+
+  return (
+    <div className="bg-rtb-surface/60 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-rtb-navy-mid uppercase tracking-wider">Contactos</h3>
+        {puedeEscribir && (
+          <button
+            type="button"
+            onClick={() => setModal({ modo: 'crear' })}
+            className="text-xs text-rtb-teal font-medium flex items-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-destructive mb-2">{error}</p>}
+      {contactos.length === 0 && <p className="text-sm text-muted-foreground">Sin contactos registrados.</p>}
+
+      <div className="space-y-2">
+        {contactos.map((c) => (
+          <div key={c.id} className="text-sm py-2 border-b border-border/50 last:border-0">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-medium text-rtb-navy">
+                  {c.nombre}
+                  {c.es_principal && <span className="text-[10px] text-rtb-teal ml-1">PRINCIPAL</span>}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {CONTACTO_TIPO_LABELS[c.tipo]} · {c.cargo ?? '—'} · {c.telefono ?? '—'} · {c.correo ?? '—'}
+                </p>
+              </div>
+              {puedeEscribir && (
+                <button
+                  type="button"
+                  onClick={() => setModal({ modo: 'editar', contacto: c })}
+                  className="text-rtb-teal shrink-0"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {puedeEscribir && (
+              <button
+                type="button"
+                onClick={() => archivar(c)}
+                disabled={archivando === c.id}
+                className="text-[11px] text-destructive mt-1"
+              >
+                {archivando === c.id ? 'Archivando…' : 'Archivar'}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {modal && (
+        <ContactoModal
+          entidadId={entidadId}
+          contacto={modal.modo === 'editar' ? modal.contacto : null}
+          principalActual={principalActual}
+          onClose={() => setModal(null)}
+          onGuardado={() => {
+            setModal(null);
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ContactoModal({
+  entidadId,
+  contacto,
+  principalActual,
+  onClose,
+  onGuardado,
+}: {
+  entidadId: string;
+  contacto: Contacto | null;
+  principalActual: Contacto | null;
+  onClose: () => void;
+  onGuardado: () => void;
+}) {
+  const editando = Boolean(contacto);
+  const [form, setForm] = useState({
+    nombre: contacto?.nombre ?? '',
+    cargo: contacto?.cargo ?? '',
+    tipo: (contacto?.tipo ?? 'operativo') as ContactoTipo,
+    correo: contacto?.correo ?? '',
+    telefono: contacto?.telefono ?? '',
+    extension: contacto?.extension ?? '',
+    es_principal: contacto?.es_principal ?? false,
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const guardar = async () => {
+    if (!form.nombre.trim()) {
+      setError('El nombre es obligatorio.');
+      return;
+    }
+    setError(null);
+    setEnviando(true);
+
+    // Sólo puede haber un principal por entidad (índice único sin
+    // discriminar por tipo) — si se marca este como principal y ya había
+    // otro distinto, hay que desmarcarlo primero, nunca al revés.
+    if (form.es_principal && principalActual && principalActual.id !== contacto?.id) {
+      const resDemover = await fetch(`/api/entidades/${entidadId}/contactos/${principalActual.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ es_principal: false }),
+      });
+      if (!resDemover.ok) {
+        const data = await resDemover.json().catch(() => ({}));
+        setEnviando(false);
+        setError(data?.error ?? `No se pudo quitar a "${principalActual.nombre}" como principal.`);
+        return;
+      }
+    }
+
+    const payload = {
+      nombre: form.nombre,
+      cargo: form.cargo || undefined,
+      tipo: form.tipo,
+      correo: form.correo || undefined,
+      telefono: form.telefono || undefined,
+      extension: form.extension || undefined,
+      es_principal: form.es_principal,
+    };
+    const url = editando ? `/api/entidades/${entidadId}/contactos/${contacto!.id}` : `/api/entidades/${entidadId}/contactos`;
+    const res = await fetch(url, {
+      method: editando ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setEnviando(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'No se pudo guardar el contacto.');
+      return;
+    }
+    onGuardado();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-xl w-full max-w-lg p-6 my-8" style={{ boxShadow: 'var(--shadow-lg)' }}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-display font-semibold text-rtb-navy">{editando ? 'Editar contacto' : 'Agregar contacto'}</h2>
+          <button type="button" onClick={onClose} className="text-muted-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 p-2.5 bg-red-50 text-red-700 rounded-lg text-xs mb-3">
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <CampoModal label="Nombre" span2 requerido>
+            <Input value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Cargo">
+            <Input value={form.cargo} onChange={(e) => setForm((f) => ({ ...f, cargo: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Tipo">
+            <select
+              value={form.tipo}
+              onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value as ContactoTipo }))}
+              className="w-full text-sm border border-border rounded-lg px-3 py-2"
+            >
+              {CONTACTO_TIPOS.map((t) => (
+                <option key={t} value={t}>
+                  {CONTACTO_TIPO_LABELS[t]}
+                </option>
+              ))}
+            </select>
+          </CampoModal>
+          <CampoModal label="Correo">
+            <Input type="email" value={form.correo} onChange={(e) => setForm((f) => ({ ...f, correo: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Teléfono">
+            <Input value={form.telefono} onChange={(e) => setForm((f) => ({ ...f, telefono: e.target.value }))} />
+          </CampoModal>
+          <CampoModal label="Extensión">
+            <Input value={form.extension} onChange={(e) => setForm((f) => ({ ...f, extension: e.target.value }))} />
+          </CampoModal>
+
+          <div className="sm:col-span-2 flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="contacto_es_principal"
+              checked={form.es_principal}
+              onChange={(e) => setForm((f) => ({ ...f, es_principal: e.target.checked }))}
+              className="w-4 h-4"
+            />
+            <label htmlFor="contacto_es_principal" className="text-sm text-rtb-navy">
+              Contacto principal de esta entidad
+            </label>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 mt-5">
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button onClick={guardar} disabled={enviando} className="bg-rtb-teal hover:bg-rtb-teal/90 text-white">
+            {enviando && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+            Guardar
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

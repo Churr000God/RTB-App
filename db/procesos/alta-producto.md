@@ -40,6 +40,44 @@ UI: `app/app/dashboard/productos/nuevo/page.tsx` (alta),
    agrupa, p.ej. `KIT`), `unidad_contenido_id` es obligatorio
    (`productos_unidad_contenido_chk`).
 
+## Estado del producto: nace en `borrador` y nadie puede activarlo (hueco confirmado 2026-08-10)
+
+`productos.estado` (`borrador → activo → descontinuado`, o `→
+requiere_depuracion`/`fusionado`) sigue el ciclo documentado en
+`contexto/RTB-INV-01_Modulo_Productos_Inventario.md` §2.2, pero **el
+formulario de alta nunca pide el estado** — `productoCreateSchema` lo pone
+en `'borrador'` por `default` siempre, sin ningún campo en la UI que lo
+sobrescriba. Confirmado con un producto real dado de alta como
+`super_admin` (`RTB-ILU-000007`, "SLIM 18W CUADRADA SL CALIDO") que quedó
+en `borrador`.
+
+**No existe ningún camino, para ningún rol, que mueva un producto de
+`borrador` a `activo`:**
+
+- `productos.estado` **no** está en el `GRANT UPDATE` de `authenticated`
+  (`015_catalogo_marcas_y_gobierno.sql:115-118` — el `revoke update on
+  public.productos` + `grant` que le siguió sólo cubre `nombre,
+  descripcion, marca_id, modelo, categoria_id, codigo_barras,
+  requiere_ubicacion, observaciones`). Como los roles de la app comparten
+  el mismo rol de Postgres `authenticated`, esto bloquea a **todos**,
+  incluido `super_admin` a nivel RLS.
+- La única puerta que sí podría saltarse ese `GRANT` es una ruta con
+  `service_role` (mismo patrón que `stock_minimo`/`stock_maximo`/
+  `es_estrategico` en `PATCH /api/productos/[id]`) — pero ninguna de las 6
+  rutas de `/api/productos/**` toca `estado`.
+- La UI (`producto-detalle.tsx`, `productos-explorer.tsx`) sólo **muestra**
+  el estado con `<ProductoEstadoBadge>` de sólo lectura; no hay botón cerca.
+- La spec del propio módulo (`RTB-INV-01_Modulo_Productos_Inventario.md`
+  §4 "Cambios controlados") no lista "activar un producto" entre los 5
+  cambios controlados reales del módulo (autorizar/aplicar ajuste,
+  autorizar/aplicar redefinición de unidad, fusionar producto) — el paso
+  nunca se diseñó, no es sólo que falte construirlo.
+
+**Pendiente para una sesión aparte** (ver TODO en `CLAUDE.md`): decidir con
+el dueño del proyecto quién activa un producto y bajo qué condición (¿libre
+para `super_admin`/`direccion`? ¿exige costo y unidad ya capturados?
+¿aplica también a `requiere_depuracion`?) antes de construir la ruta/botón.
+
 ## Dos identificadores, ninguno es la identidad única condicional
 
 `codigo_interno` es la clave de RTB — único **sólo** entre filas
@@ -95,6 +133,7 @@ que no tienen foto muestran un ícono de caja.
 | La unidad de medida no cambia con un `PATCH` directo | Es la barrera intencional — usa `/redefinir-unidad` |
 | "Formato no admitido (¿HEIC de iPhone?...)" al subir una foto | `createImageBitmap` no decodifica HEIC fuera de Safari — cambiar la cámara del iPhone a "Más compatible" o convertir a JPG antes de subir |
 | "Para cambiar la imagen principal, marca otra imagen como principal" | El PATCH de imágenes rechaza `es_principal: false` explícito a propósito — despromover sin promover otra dejaría al producto sin principal |
+| El producto se queda en "Borrador" para siempre, ni `super_admin` lo cambia | Hueco confirmado 2026-08-10 — no existe ruta ni botón que escriba `estado`, ver sección arriba |
 
 ## Costo de catálogo — pantalla (gap de UI cerrado 2026-08-06)
 

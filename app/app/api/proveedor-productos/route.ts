@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     const supabase = createSupabaseServerClient();
     let query = supabase
       .from('proveedor_productos')
-      .select('*')
+      .select('*, proveedores(entidades(nombre_comercial, nombre_legal))')
       .order('created_at', { ascending: false });
     if (proveedorId) query = query.eq('proveedor_id', proveedorId);
     if (productoId) query = query.eq('producto_id', productoId);

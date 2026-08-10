@@ -61,7 +61,7 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
   // — el usuario sigue pudiendo elegir la otra vía, es sólo un default.
   const { data: cliente } = await supabase
     .from('clientes')
-    .select('requiere_po')
+    .select('requiere_po, descuento_base')
     .eq('entidad_id', cotizacion.entidad_id)
     .maybeSingle();
 
@@ -90,6 +90,7 @@ export default async function CotizacionDetallePage({ params }: { params: { id: 
       envios={(envios ?? []) as any}
       nombresUsuarios={nombresUsuarios}
       requierePo={cliente?.requiere_po ?? false}
+      descuentoBaseCliente={cliente?.descuento_base ?? 0}
     />
   );
 }

@@ -32,9 +32,13 @@ export default async function EntidadDetallePage({
 
   // Una solicitud de crédito vive en tabla='clientes' (registro_id =
   // clientes.id, no entidades.id) — filtrar sólo por 'entidades' dejaba
-  // invisible cualquier solicitud de límite de crédito pendiente.
+  // invisible cualquier solicitud de límite de crédito pendiente. Mismo
+  // defecto para 'proveedores' (condicion_proveedor, registro_id =
+  // proveedores.id) — sin esta rama, "Solicitud pendiente" nunca aparecía
+  // en la tarjeta de condiciones comerciales de proveedor.
   const filtroTabla = [`and(tabla.eq.entidades,registro_id.eq.${params.id})`];
   if (cliente.data) filtroTabla.push(`and(tabla.eq.clientes,registro_id.eq.${cliente.data.id})`);
+  if (proveedor.data) filtroTabla.push(`and(tabla.eq.proveedores,registro_id.eq.${proveedor.data.id})`);
   const solicitudes = await supabase
     .from('solicitudes_cambio')
     .select('*')

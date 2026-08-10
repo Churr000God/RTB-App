@@ -26,6 +26,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { ImagenUploader } from '@/components/inventario/imagen-uploader';
+import { ProveedorCombobox } from '@/components/inventario/proveedor-combobox';
 import {
   AlertCircle,
   ArrowDown,
@@ -125,6 +126,7 @@ export function ProductoDetalle({ producto, familia, categoria, marca, unidad, e
             <p className="text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
               <span className="tabular-nums text-xs">{producto.codigo_interno}</span>
               {producto.sku && <span className="tabular-nums text-xs">SKU: {producto.sku}</span>}
+              <span className="tabular-nums text-xs">Código de barras: {producto.codigo_barras}</span>
               <ProductoEstadoBadge estado={producto.estado} />
             </p>
           </div>
@@ -627,6 +629,22 @@ function CostosTab({
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
+  // El costo es "de qué proveedor" — proveedor_producto_id ya existía en
+  // el schema/tabla (010_inventario_costos.sql), sin ningún selector de UI
+  // que lo capturara. Sirve para filtrar costos por proveedor en facturas/
+  // solicitudes de compra futuras (Compras, RTB-PRO-COM-01). Como
+  // proveedor_productos tampoco tenía ninguna pantalla propia, "Nuevo
+  // costo" también sirve de alta rápida de un proveedor_producto.
+  const [proveedorProductos, setProveedorProductos] = useState<any[]>([]);
+  const [proveedorProductoId, setProveedorProductoId] = useState('');
+  const [unidades, setUnidades] = useState<UnidadMedida[]>([]);
+  const [agregandoProveedor, setAgregandoProveedor] = useState(false);
+  const [nuevoProveedorEntidadId, setNuevoProveedorEntidadId] = useState<string | null>(null);
+  const [nuevoProveedorCosto, setNuevoProveedorCosto] = useState('');
+  const [nuevoProveedorUnidadId, setNuevoProveedorUnidadId] = useState('');
+  const [errorProveedor, setErrorProveedor] = useState<string | null>(null);
+  const [guardandoProveedor, setGuardandoProveedor] = useState(false);
+
   const cargar = async () => {
     setLoading(true);
     const res = await fetch(`/api/productos/${productoId}/costos`, { cache: 'no-store' });
@@ -639,9 +657,62 @@ function CostosTab({
     setCostos(data.data ?? []);
   };
 
+  const cargarProveedores = async () => {
+    const res = await fetch(`/api/proveedor-productos?producto_id=${productoId}`, { cache: 'no-store' });
+    if (res.ok) setProveedorProductos((await res.json()).data ?? []);
+  };
+
   useEffect(() => {
     void cargar();
+    void cargarProveedores();
+    fetch('/api/catalogos/unidades-medida')
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((d) => setUnidades(d.data ?? []));
   }, [productoId]);
+
+  const nombreProveedorProducto = (pp: any) =>
+    pp.proveedores?.entidades?.nombre_comercial ?? pp.proveedores?.entidades?.nombre_legal ?? 'Proveedor';
+
+  const agregarProveedorProducto = async () => {
+    if (!nuevoProveedorEntidadId || !nuevoProveedorCosto || !nuevoProveedorUnidadId) {
+      setErrorProveedor('Elige proveedor, costo y unidad.');
+      return;
+    }
+    setErrorProveedor(null);
+    setGuardandoProveedor(true);
+    // proveedor_productos.proveedor_id referencia proveedores(id), no
+    // entidades(id) — el combobox busca entidades, así que primero se
+    // resuelve la extensión de proveedor de la entidad elegida.
+    const resEntidad = await fetch(`/api/entidades/${nuevoProveedorEntidadId}`, { cache: 'no-store' });
+    const dataEntidad = await resEntidad.json().catch(() => ({}));
+    if (!resEntidad.ok || !dataEntidad?.proveedor?.id) {
+      setGuardandoProveedor(false);
+      setErrorProveedor('Esa entidad no tiene extensión de proveedor.');
+      return;
+    }
+    const res = await fetch('/api/proveedor-productos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proveedor_id: dataEntidad.proveedor.id,
+        producto_id: productoId,
+        costo_unitario: Number(nuevoProveedorCosto),
+        unidad_medida_id: nuevoProveedorUnidadId,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setGuardandoProveedor(false);
+    if (!res.ok) {
+      setErrorProveedor(data?.error ?? 'No se pudo agregar el proveedor.');
+      return;
+    }
+    await cargarProveedores();
+    setProveedorProductoId(data.data.id);
+    setAgregandoProveedor(false);
+    setNuevoProveedorEntidadId(null);
+    setNuevoProveedorCosto('');
+    setNuevoProveedorUnidadId('');
+  };
 
   const registrarCosto = async () => {
     setError(null);
@@ -653,6 +724,7 @@ function CostosTab({
       body: JSON.stringify({
         costo_unitario: Number(costoUnitario),
         origen,
+        proveedor_producto_id: proveedorProductoId || undefined,
         vigente_desde: vigenteDesde || undefined,
         motivo: motivo || undefined,
       }),
@@ -667,6 +739,7 @@ function CostosTab({
     setCostoUnitario('');
     setVigenteDesde('');
     setMotivo('');
+    setProveedorProductoId('');
     await cargar();
     toast.success('Costo de catálogo registrado.');
     // Reevalúa costo_unitario_vigente() (prop del Server Component) — el
@@ -744,6 +817,98 @@ function CostosTab({
               <Input value={motivo} onChange={(e) => setMotivo(e.target.value)} />
             </div>
           </div>
+
+          <div>
+            <Label className="text-xs">Proveedor (opcional)</Label>
+            <select
+              value={agregandoProveedor ? '__nuevo__' : proveedorProductoId}
+              onChange={(e) => {
+                if (e.target.value === '__nuevo__') {
+                  setAgregandoProveedor(true);
+                  setProveedorProductoId('');
+                } else {
+                  setAgregandoProveedor(false);
+                  setProveedorProductoId(e.target.value);
+                }
+              }}
+              className="w-full text-sm border border-border rounded-lg px-3 py-2"
+            >
+              <option value="">Sin proveedor específico</option>
+              {proveedorProductos.map((pp) => (
+                <option key={pp.id} value={pp.id}>
+                  {nombreProveedorProducto(pp)} — ${Number(pp.costo_unitario).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                </option>
+              ))}
+              {puede(role, 'proveedor_productos', 'insert') && <option value="__nuevo__">+ Agregar proveedor nuevo…</option>}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Liga este costo a un proveedor — sirve para filtrar costos por proveedor en facturas y solicitudes
+              de compra más adelante.
+            </p>
+          </div>
+
+          {agregandoProveedor && (
+            <div className="p-3 bg-white border border-border rounded-lg space-y-2">
+              {errorProveedor && (
+                <div className="flex items-center gap-2 p-2 bg-red-50 text-red-700 rounded-lg text-xs">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{errorProveedor}</span>
+                </div>
+              )}
+              <div>
+                <Label className="text-xs">Proveedor</Label>
+                <ProveedorCombobox value={nuevoProveedorEntidadId} onChange={(id) => setNuevoProveedorEntidadId(id)} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs">Costo del proveedor</Label>
+                  <Input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={nuevoProveedorCosto}
+                    onChange={(e) => setNuevoProveedorCosto(e.target.value)}
+                    className="tabular-nums"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Unidad en la que cotiza</Label>
+                  <select
+                    value={nuevoProveedorUnidadId}
+                    onChange={(e) => setNuevoProveedorUnidadId(e.target.value)}
+                    className="w-full text-sm border border-border rounded-lg px-3 py-2"
+                  >
+                    <option value="">Selecciona</option>
+                    {unidades.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.clave} — {u.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setAgregandoProveedor(false);
+                    setNuevoProveedorEntidadId(null);
+                    setNuevoProveedorCosto('');
+                    setNuevoProveedorUnidadId('');
+                    setErrorProveedor(null);
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button size="sm" onClick={agregarProveedorProducto} disabled={guardandoProveedor}>
+                  {guardandoProveedor && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                  Agregar proveedor
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setCreando(false)}>
               Cancelar
@@ -765,6 +930,7 @@ function CostosTab({
               <th className="py-2">Vigente hasta</th>
               <th className="py-2 text-right">Costo</th>
               <th className="py-2">Origen</th>
+              <th className="py-2">Proveedor</th>
               <th className="py-2">Motivo</th>
             </tr>
           </thead>
@@ -775,12 +941,13 @@ function CostosTab({
                 <td className="py-2 tabular-nums">{c.vigente_hasta ?? '—'}</td>
                 <td className="py-2 text-right tabular-nums">${Number(c.costo_unitario).toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
                 <td className="py-2">{c.origen}</td>
+                <td className="py-2 text-muted-foreground">{c.proveedor_nombre ?? '—'}</td>
                 <td className="py-2 text-muted-foreground">{c.motivo ?? '—'}</td>
               </tr>
             ))}
             {costos.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-6 text-center text-muted-foreground">
+                <td colSpan={6} className="py-6 text-center text-muted-foreground">
                   Sin costos de catálogo registrados.
                 </td>
               </tr>

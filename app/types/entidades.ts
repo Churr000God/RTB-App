@@ -98,8 +98,10 @@ export interface Cliente {
   limite_credito: number;
   dias_credito: number;
   dias_gracia: number;
-  lista_precio: string | null;
-  descuento_maximo: number;
+  // Sólo prellena el descuento de una línea nueva en RTB-VEN-01 (editable,
+  // sin tope) — nunca fue "máximo" en el sentido de una validación que lo
+  // haga cumplir, ver 053_clientes_descuento_base_rename.sql.
+  descuento_base: number;
   vendedor_id: string | null;
   canal_origen: CanalOrigen | null;
   // RTB-VEN-01 (029_ventas_congelamientos.sql) — política de facturación,

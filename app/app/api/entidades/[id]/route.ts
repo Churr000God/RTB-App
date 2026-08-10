@@ -7,6 +7,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { requireApiRole } from '@/lib/supabase/guards';
 import { entidadUpdateLibreSchema, rfcSchema } from '@/lib/entidades/schemas';
 import { mensajeDuplicadoEntidad } from '@/lib/entidades/errores';
+import { PERSONA_TIPOS } from '@/types/entidades';
 
 // GET - detalle completo: entidad + extensión de rol + contactos/direcciones
 // activos + solicitudes de cambio pendientes.
@@ -51,7 +52,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
   }
 }
 
-const CAMPOS_SENSIBLES = ['nombre_legal', 'rfc'] as const;
+const CAMPOS_SENSIBLES = ['nombre_legal', 'rfc', 'persona_tipo'] as const;
 
 // PATCH - "modificación libre" de P05 para cualquier rol con acceso de
 // escritura; nombre_legal/rfc ("modificación controlada") sólo los toca
@@ -82,6 +83,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         ? entidadUpdateLibreSchema.extend({
             nombre_legal: z.string().trim().min(3).max(200).optional(),
             rfc: rfcSchema.optional().nullable(),
+            persona_tipo: z.enum(PERSONA_TIPOS).optional(),
           })
         : entidadUpdateLibreSchema;
 

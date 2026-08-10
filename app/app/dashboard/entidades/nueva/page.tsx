@@ -22,6 +22,8 @@ import {
   PERSONA_TIPO_LABELS,
   UMBRAL_APROBACION_CREDITO,
 } from '@/lib/entidades/config';
+import { ejecutaDirecto } from '@/lib/entidades/permisos';
+import { AvisoLimiteCredito } from '@/components/entidades/aviso-credito';
 import { CANAL_ORIGENES, CONDICION_PAGOS, ENTIDAD_TIPOS, PERSONA_TIPOS } from '@/types/entidades';
 import type { CanalOrigen, CondicionPago, EntidadTipo, PersonaTipo } from '@/types/entidades';
 import MapaPunto from '@/components/mapas/MapaPunto';
@@ -42,8 +44,7 @@ const initialForm = {
   // comerciales cliente
   limite_credito: '0',
   dias_credito: '0',
-  descuento_maximo: '0',
-  lista_precio: '',
+  descuento_base: '0',
   canal_origen: '' as CanalOrigen | '',
   // comerciales proveedor
   categoria: '',
@@ -107,7 +108,8 @@ export default function NuevaEntidadPage() {
   const esProveedor = form.tipo === 'proveedor' || form.tipo === 'mixta';
 
   const limiteCredito = Number(form.limite_credito) || 0;
-  const requiereAprobacion = esCliente && limiteCredito > UMBRAL_APROBACION_CREDITO;
+  const requiereAprobacion =
+    esCliente && limiteCredito > UMBRAL_APROBACION_CREDITO && !ejecutaDirecto('limite_credito', role);
 
   const tiposDisponibles = useMemo(() => {
     if (role === 'ventas') return ENTIDAD_TIPOS.filter((t) => t !== 'proveedor');
@@ -158,8 +160,7 @@ export default function NuevaEntidadPage() {
         payload.cliente = {
           limite_credito: Number(form.limite_credito) || 0,
           dias_credito: Number(form.dias_credito) || 0,
-          descuento_maximo: Number(form.descuento_maximo) || 0,
-          lista_precio: form.lista_precio || undefined,
+          descuento_base: Number(form.descuento_base) || 0,
           canal_origen: form.canal_origen || undefined,
         };
       }
@@ -301,20 +302,15 @@ export default function NuevaEntidadPage() {
             <Seccion titulo="Datos comerciales (cliente)">
               <Campo label="Límite de crédito">
                 <Input type="number" min="0" value={form.limite_credito} onChange={set('limite_credito')} className="tabular-nums" />
-                {requiereAprobacion && (
-                  <p className="text-xs text-accent mt-1">
-                    Supera ${UMBRAL_APROBACION_CREDITO.toLocaleString('es-MX')} — quedará pendiente de aprobación de dirección.
-                  </p>
-                )}
+                <div className="mt-1">
+                  <AvisoLimiteCredito role={role} limite={limiteCredito} />
+                </div>
               </Campo>
               <Campo label="Días de crédito">
                 <Input type="number" min="0" value={form.dias_credito} onChange={set('dias_credito')} className="tabular-nums" />
               </Campo>
               <Campo label="Descuento base %">
-                <Input type="number" min="0" max="100" value={form.descuento_maximo} onChange={set('descuento_maximo')} className="tabular-nums" />
-              </Campo>
-              <Campo label="Lista de precios">
-                <Input value={form.lista_precio} onChange={set('lista_precio')} placeholder="A" />
+                <Input type="number" min="0" max="100" value={form.descuento_base} onChange={set('descuento_base')} className="tabular-nums" />
               </Campo>
               <Campo label="Canal de origen">
                 <select value={form.canal_origen} onChange={set('canal_origen')} className="w-full text-sm border border-border rounded-lg px-3 py-2">

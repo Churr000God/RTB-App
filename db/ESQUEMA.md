@@ -326,13 +326,12 @@ sólo por `service_role` (la API aplica primero la lógica de aprobación).
 | `entidad_id` | uuid (único) → `entidades(id)` | no | — | `ON DELETE RESTRICT` |
 | `limite_credito` | numeric(14,2) | no | `0` | `>= 0`; **"modificación controlada" sobre $100,000** |
 | `dias_credito` / `dias_gracia` | integer | no | `0` | `>= 0` |
-| `lista_precio` | varchar(50) | sí | — | |
-| `descuento_maximo` | numeric(5,2) | no | `0` | `0..100` |
+| `descuento_base` | numeric(5,2) | no | `0` | `0..100`; sólo prellena (editable, sin tope) el descuento de una línea nueva en RTB-VEN-01 — nunca fue una validación que se haga cumplir, ver `053_clientes_descuento_base_rename.sql` (se llamaba `descuento_maximo`) |
 | `vendedor_id` | uuid → `profiles(id)` | sí | — | no expuesto todavía en el formulario de alta |
 | `canal_origen` | `canal_origen` | sí | — | |
 
 **Grants:** `SELECT`/`INSERT` libres; `UPDATE` de `(dias_credito, dias_gracia,
-lista_precio, descuento_maximo, vendedor_id, canal_origen, limite_credito)`
+descuento_base, vendedor_id, canal_origen, limite_credito)`
 — `limite_credito` se agregó en `019_clientes_limite_credito_grant.sql`
 (gap encontrado corrigiendo `contexto/AUDITORIA_QA_ROLES_2026-08-06.md`
 E-07: faltaba por completo, así que ni `super_admin` podía aplicar

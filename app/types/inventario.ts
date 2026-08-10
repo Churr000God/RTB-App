@@ -187,7 +187,7 @@ export interface Producto {
   marca_id: string | null;
   modelo: string | null;
   categoria_id: string | null;
-  codigo_barras: string | null;
+  codigo_barras: string;
   unidad_medida_id: string;
   contenido_por_unidad: number;
   unidad_contenido_id: string | null;

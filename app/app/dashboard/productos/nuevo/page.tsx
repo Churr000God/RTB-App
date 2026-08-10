@@ -18,11 +18,11 @@ const initialForm = {
   marca_id: '',
   modelo: '',
   categoria_id: '',
-  codigo_barras: '',
   unidad_medida_id: '',
   contenido_por_unidad: '1',
   unidad_contenido_id: '',
   requiere_ubicacion: true,
+  es_estrategico: false,
 };
 
 export default function NuevoProductoPage() {
@@ -75,11 +75,11 @@ export default function NuevoProductoPage() {
         marca_id: form.marca_id || undefined,
         modelo: form.modelo || undefined,
         categoria_id: form.categoria_id || undefined,
-        codigo_barras: form.codigo_barras || undefined,
         unidad_medida_id: form.unidad_medida_id,
         contenido_por_unidad: Number(form.contenido_por_unidad) || 1,
         unidad_contenido_id: llevaAgrupacion ? form.unidad_contenido_id || undefined : undefined,
         requiere_ubicacion: form.requiere_ubicacion,
+        es_estrategico: form.es_estrategico,
       };
 
       const res = await fetch('/api/productos', {
@@ -135,6 +135,9 @@ export default function NuevoProductoPage() {
             </Campo>
             <Campo label="Código interno">
               <Input value={form.codigo_interno} onChange={set('codigo_interno')} placeholder="Se genera automáticamente si se omite" className="tabular-nums" />
+              <p className="text-xs text-muted-foreground mt-1">
+                También es el código de barras: el sistema lo genera, no se captura ni se edita después.
+              </p>
             </Campo>
             <Campo label="SKU (número de parte del fabricante)">
               <Input value={form.sku} onChange={set('sku')} className="tabular-nums" />
@@ -167,9 +170,6 @@ export default function NuevoProductoPage() {
                   </option>
                 ))}
               </select>
-            </Campo>
-            <Campo label="Código de barras">
-              <Input value={form.codigo_barras} onChange={set('codigo_barras')} className="tabular-nums" />
             </Campo>
           </Seccion>
 
@@ -205,11 +205,27 @@ export default function NuevoProductoPage() {
             )}
           </Seccion>
 
-          <Seccion titulo="Ubicación">
+          <Seccion titulo="Ubicación y compras">
             <label className="flex items-center gap-2 text-sm sm:col-span-2">
               <input type="checkbox" checked={form.requiere_ubicacion} onChange={(e) => setForm((f) => ({ ...f, requiere_ubicacion: e.target.checked }))} />
               Este producto debe tener ubicación asignada
             </label>
+            <p className="text-xs text-muted-foreground sm:col-span-2 -mt-2">
+              La ubicación física en el almacén no se asigna aquí — se hace después desde Inventario → Ajustes,
+              al registrar la primera existencia.
+            </p>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={form.es_estrategico}
+                onChange={(e) => setForm((f) => ({ ...f, es_estrategico: e.target.checked }))}
+              />
+              Producto estratégico
+            </label>
+            <p className="text-xs text-muted-foreground sm:col-span-2 -mt-2">
+              Si lleva más de 180 días sin movimiento y aún tiene existencia, Compras normalmente vería la
+              sugerencia &quot;bloquear compra&quot; — marcado como estratégico, la sugerencia baja a &quot;revisar&quot; en su lugar.
+            </p>
           </Seccion>
         </div>
 

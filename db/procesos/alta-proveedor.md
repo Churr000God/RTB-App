@@ -32,8 +32,18 @@ proveedores por condición de pago) y no tenía dónde vivir. Ver
   controlada".
 - **Controlada:** `categoria`/`condicion_pago` — "categoría de proveedor:
   compras inicia, direccion aprueba" (P05 §II). Sin `GRANT UPDATE`; el
-  cambio exige `POST /api/solicitudes-cambio` con
-  `tipo_cambio: 'condicion_proveedor'`, resuelto por `direccion`.
+  cambio exige una solicitud (`tipo_cambio: 'condicion_proveedor'`),
+  resuelta por `direccion` en `/dashboard/solicitudes`. **Hasta 2026-08-10
+  esto era una regla declarada sin interfaz real**: la tarjeta "Condiciones
+  comerciales · Proveedor" era de sólo lectura, sin lápiz ni ruta —
+  `compras` no tenía ninguna forma de siquiera proponer el cambio desde la
+  app (el resolver ya sabía aplicarlo, pero era inalcanzable). Cerrado con
+  `PATCH /api/entidades/[id]/proveedor` (ruta nueva, dedicada — decide sola
+  directo-vs-solicitud con `ejecutaDirecto()`, mismo patrón que
+  `.../cliente` para `limite_credito`) y **`CampoP05Multi`** en
+  `entidad-detalle.tsx`: variante de `CampoP05` que cubre `categoria` +
+  `condicion_pago` en una sola solicitud (a diferencia de `rfc`/`razon_social`/
+  `persona_tipo`, que son de un solo campo cada uno).
 
 ## Siguiente paso natural: cuenta bancaria
 
@@ -45,6 +55,8 @@ mucho más restringido (sólo `finanzas`/`super_admin`) — ver
 ## Qué puede fallar
 
 Los mismos casos que `alta-cliente.md` (RFC duplicado, campos comerciales
-faltantes), más: `403` al intentar `PATCH categoria`/`condicion_pago` desde
-cualquier rol que no sea `super_admin` — el mensaje señala explícitamente
-`POST /api/solicitudes-cambio`.
+faltantes), más: `PATCH /api/entidades/[id]/proveedor` sólo acepta
+`super_admin`/`compras` (`requireApiRole`) — cualquier otro rol, incluido
+`direccion` (que sólo aprueba, no propone), recibe `403` ahí. Si `compras`
+manda un motivo de menos de 5 caracteres, `400` "El motivo debe tener al
+menos 5 caracteres" antes de crear la solicitud.
