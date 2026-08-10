@@ -101,7 +101,7 @@ siempre Postgres.
 |---|---|---|---|
 | Catálogos: unidad/familia | 8 roles | `super_admin`/`direccion`/`compras` (**sin** `almacen` desde `015`) | igual |
 | Catálogos: categoría/marca | 8 roles | `super_admin`/`direccion`/`compras`/`almacen` | igual |
-| Productos | 8 roles | `super_admin`/`direccion`/`compras`/`almacen` | igual (libre); `stock_minimo`/`stock_maximo`/`es_estrategico` sólo por API |
+| Productos | 8 roles | `super_admin`/`direccion`/`compras`/`almacen` | igual (libre); `stock_minimo`/`stock_maximo`/`estado`/`codigo_barras` sólo por `service_role` — `es_estrategico` sí se puede fijar al alta (`INSERT` no restringe columnas), pero editarlo después también requiere `service_role` |
 | Proveedor↔producto | `super_admin`/`direccion`/`compras`/`finanzas` (**no** `almacen`) | `super_admin`/`direccion`/`compras` | igual |
 | Costo de catálogo | 8 roles | `super_admin`/`direccion`/`compras`/`finanzas` | — (sin `UPDATE`; una corrección es una fila nueva) |
 | Existencias | 8 roles | — | — (sólo el trigger del kardex / aplicación de un conteo) |

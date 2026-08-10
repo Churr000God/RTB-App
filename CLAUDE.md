@@ -1877,6 +1877,100 @@ contra Supabase — ver TODO.
   incluida la verificación capa por capa, en
   `db/procesos/alta-producto.md` y en el TODO de abajo.
 
+- **2026-08-10 (sesión aparte, concurrente con las de arriba) — RTB-INV-01:
+  código de barras autogenerado y fijo, checkbox "Producto estratégico" en
+  el alta, y el costo de catálogo ahora liga a un proveedor.** El dueño del
+  proyecto probó dar de alta un producto y trajo cuatro preguntas: qué es
+  el código de barras (hoy texto libre capturado a mano, sin relación con
+  el proveedor), por qué "costo" no pregunta a qué proveedor pertenece, qué
+  significa "estratégico", y dónde se asigna la ubicación del inventario
+  (no la encontró en el alta).
+
+  **Investigación primero, sin tocar código.** Dos hallazgos explican las
+  dos últimas preguntas sin necesitar ningún cambio:
+  - **"Estratégico"** (`es_estrategico`) ya tenía efecto real en
+    `inventario_alerta_stock()` (`014_inventario_kpis.sql:159-161`): si un
+    producto tiene existencia física y lleva más de 180 días sin
+    movimiento, la acción sugerida normalmente es `'bloquear_compra'`;
+    marcado como estratégico, baja a `'revisar'` — mismo criterio que ya
+    usa "cliente estratégico" en las reglas de Compras
+    (`RTB-PRO-COM-01_Modulo_Compras.md`). El campo **no tenía ningún
+    control de UI** (ni en el alta ni después), sólo se mostraba de sólo
+    lectura — de ahí la pregunta. Aparte: `inventario_alerta_stock()` no
+    tiene todavía ningún consumidor de UI (`/api/inventario/alertas` sin
+    pantalla) — hoy es lógica lista, invisible hasta que exista Compras.
+  - **La ubicación no se asigna en el alta por diseño, no por descuido.**
+    El catálogo (`productos`) y las existencias por ubicación
+    (`inventario_existencias`) son conceptos separados a propósito; esa
+    tabla no admite `INSERT`/`UPDATE` directo, sólo la escribe el trigger
+    del kardex o la aplicación de un conteo. Un producto nuevo nace sin
+    ubicación siempre (documentado: así está hoy el 73.9% del catálogo
+    real). El camino real: `Inventario → Ajustes → Nuevo ajuste`.
+
+  **Código de barras — migración `055_productos_codigo_barras_autogenerado.sql`.**
+  Confirmado con `AskUserQuestion` con el dueño del proyecto: se autogenera
+  igual a `codigo_interno` (Code128 acepta alfanumérico directo, sin
+  checksum EAN-13 aparte) y queda **fijo para siempre** — ni siquiera
+  `super_admin` lo edita después, para que una etiqueta ya impresa nunca
+  deje de coincidir con el sistema. Se quitó del formulario de alta y de
+  ambos schemas zod (`productoCreateSchema`/`productoUpdateLibreSchema`);
+  el trigger `productos_before_insert()` lo fija siempre después de
+  resolver `codigo_interno` (sin excepción, aunque el cliente mande algo
+  distinto en el `INSERT` — el `GRANT INSERT` de `productos` no restringe
+  columnas); `revoke update (codigo_barras) on productos from authenticated`
+  cierra el único camino que quedaba. Backfill de los 5 productos de
+  prueba existentes (`codigo_barras = codigo_interno`) y `NOT NULL` nuevo.
+  Verificado por SQL con rol real que ni `super_admin` puede hacer
+  `UPDATE productos SET codigo_barras = ...` (`42501`).
+
+  **Checkbox "Producto estratégico" en el alta.** `productoCreateSchema`
+  ya aceptaba `es_estrategico` (nunca se exponía en el formulario) y el
+  `GRANT INSERT` de `productos` no restringe columnas — no hizo falta
+  tocar backend, sólo agregar el checkbox con la explicación de su efecto
+  (misma explicación que se le dio al dueño del proyecto). Editarlo
+  **después** de creado sigue sin control de UI (fuera de alcance de esta
+  sesión, mismo hueco que `stock_minimo`/`stock_maximo`).
+
+  **Costo de catálogo liga a un proveedor.** `producto_costos.proveedor_producto_id`
+  existía desde `010_inventario_costos.sql`, sin ningún selector — el
+  formulario "Nuevo costo" lo ignoraba por completo. Al investigar se
+  encontró que `proveedor_productos` (la tabla que de verdad liga
+  proveedor↔producto↔precio) **tampoco tenía ninguna pantalla en todo el
+  repo** — cero consumidores de `POST /api/proveedor-productos`. Decisión
+  confirmada con el dueño del proyecto (`AskUserQuestion`, no construir una
+  pantalla completa de "lista de precios de proveedor" todavía): selector
+  rápido dentro del mismo formulario de costo — un `<select>` con los
+  `proveedor_productos` que ya tiene el producto, más
+  **"+ Agregar proveedor nuevo…"** que despliega `<ProveedorCombobox>`
+  (nuevo, `components/inventario/proveedor-combobox.tsx`, calcado de
+  `EntidadCombobox` de Ventas pero filtrando `proveedor`/`mixta` — busca
+  `entidades`, y el `proveedor_productos.proveedor_id` real se resuelve
+  aparte vía `GET /api/entidades/{entidadId}` → `data.proveedor.id`, ya
+  que `proveedores` no comparte `id` con `entidades`) + costo del
+  proveedor + unidad en la que cotiza. Gateado a
+  `super_admin`/`direccion`/`compras` (`finanzas` ve el selector pero no
+  la opción de agregar — no tiene `GRANT INSERT` en `proveedor_productos`).
+  `GET /api/proveedor-productos` y `GET /api/productos/[id]/costos`
+  ganaron la resolución del nombre del proveedor (el segundo por
+  consultas separadas, no un embed anidado de 3 niveles, para que
+  `almacen` sin `SELECT` en `proveedor_productos` reciba `null` en vez de
+  romper el embed completo).
+
+  Verificado extremo a extremo en el navegador (`qa.compras`/`super_admin`
+  de prueba, nunca la cuenta real): alta de un producto con "Producto
+  estratégico" marcado → ficha muestra "Estratégico: Sí" y "Código de
+  barras: RTB-AHO-000009" igual al código interno; en Costos, "+ Agregar
+  proveedor nuevo…" con un proveedor real (`QA Proveedor Uno`) → queda
+  preseleccionado tras crearse → costo guardado con el proveedor visible
+  en el histórico. `docker build --target builder` limpio, sin `ERROR`
+  nuevo en el advisor. Datos de prueba (producto, costo, `proveedor_producto`)
+  borrados por SQL directo al cerrar — el catálogo real sigue vacío por
+  decisión del dueño del proyecto, no valía la pena dejarlos como
+  evidencia. Sesión concurrente en el mismo repositorio (`condicion_proveedor`/
+  filtros de solicitudes, entrada de arriba) — el commit final quedó
+  combinado por fuera de esta sesión; se verificó que el contenido de cada
+  archivo propio llegó intacto al repositorio.
+
 ## TODO
 
 - **RTB-INV-01 — ningún rol puede activar un producto (`borrador →

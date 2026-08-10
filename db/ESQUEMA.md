@@ -636,7 +636,7 @@ Grants/RLS iguales a `producto_categorias`.
 | `marca_id` | uuid → `producto_marcas(id)` | sí | — | sustituye a `marca` (texto libre) desde `015` |
 | `modelo` | varchar(120) | sí | — | texto libre |
 | `categoria_id` | uuid → `producto_categorias(id)` | sí | — | |
-| `codigo_barras` | varchar(60) | sí | — | |
+| `codigo_barras` | varchar(60) | no | trigger (`= codigo_interno`) | autogenerado al alta (`055`), fijo para siempre — sin `GRANT UPDATE` para nadie |
 | `unidad_medida_id` | uuid → `unidades_medida(id)` | no | — | **sólo cambia vía redefinición autorizada** (`productos_guard_unidad()`) |
 | `contenido_por_unidad` | numeric(14,4) | no | `1` | `> 0` |
 | `unidad_contenido_id` | uuid → `unidades_medida(id)` | sí | — | obligatoria si `contenido_por_unidad ≠ 1` |
@@ -651,10 +651,10 @@ trigram de `codigo_interno`/`sku`, btree de `familia_id`/`categoria_id`/
 `unidad_medida_id`/`estado`/`producto_canonico_id`.
 
 **Grants:** `INSERT` libre; `UPDATE` de `(nombre, descripcion, marca_id,
-modelo, categoria_id, codigo_barras, requiere_ubicacion, observaciones)` —
-identidad, unidad de medida, `estado` y parámetros comerciales sólo por
-`service_role`. **RLS:** 8 roles leen; `super_admin`/`direccion`/`compras`/
-`almacen` administran.
+modelo, categoria_id, requiere_ubicacion, observaciones)` — identidad,
+unidad de medida, `estado`, `codigo_barras` (desde `055`) y parámetros
+comerciales sólo por `service_role`. **RLS:** 8 roles leen;
+`super_admin`/`direccion`/`compras`/`almacen` administran.
 
 ### `producto_imagenes` (`021`)
 
@@ -709,7 +709,14 @@ también borra el objeto del bucket). Sin `DELETE`. **RLS:** 8 roles leen;
 **Grants:** `INSERT` libre; `UPDATE` de precio/condiciones, no de identidad.
 **RLS:** `super_admin`/`direccion`/`compras`/`finanzas` leen — **`almacen`
 no**, llega al costo por `costo_unitario_vigente()`; `super_admin`/
-`direccion`/`compras` administran.
+`direccion`/`compras` administran (`finanzas` no inserta, sólo lee).
+
+**UI (`2026-08-10`):** no tiene pantalla propia — la única forma de dar de
+alta un registro es el selector "+ Agregar proveedor nuevo…" dentro de
+"Nuevo costo" en la ficha de producto (pestaña Costos), que captura sólo
+lo mínimo (`proveedor_id`, `costo_unitario`, `unidad_medida_id`) y usa el
+`id` devuelto como `producto_costos.proveedor_producto_id`. Antes de esa
+fecha no existía ningún consumidor de UI para esta tabla.
 
 ### `producto_costos`
 
@@ -717,6 +724,7 @@ no**, llega al costo por `costo_unitario_vigente()`; `super_admin`/
 |---|---|---|---|---|
 | `costo_unitario` | numeric(14,6) | no | — | `>= 0` |
 | `origen` | `costo_origen` | no | — | |
+| `proveedor_producto_id` | uuid → `proveedor_productos(id)` | sí | — | liga el costo a un proveedor; UI desde `2026-08-10` (antes sólo existía en el schema, sin selector) |
 | `vigente_desde` / `vigente_hasta` | date | no/sí | `current_date`/— | único abierto (`vigente_hasta IS NULL`) por producto |
 | `motivo` | text | sí | — | obligatorio si `vigente_desde` es pasado (carga retroactiva) |
 

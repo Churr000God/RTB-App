@@ -19,7 +19,10 @@ Consultar: los 8 roles. Crear/editar libremente: `super_admin`,
 `direccion`, `compras`, `almacen`. Editar `stock_minimo`/`stock_maximo`/
 `es_estrategico`: sólo `super_admin`/`direccion`/`compras` (vía API con
 `service_role` — el `GRANT` de Postgres no distingue rol de negocio dentro
-de `authenticated`).
+de `authenticated`) — `es_estrategico` sí se puede fijar **al dar de alta**
+(el `GRANT INSERT` no restringe columnas, sólo el `UPDATE` posterior), por
+eso el formulario de alta tiene su checkbox aunque no exista uno para
+editarlo después.
 
 ## Dónde
 
@@ -39,6 +42,14 @@ UI: `app/app/dashboard/productos/nuevo/page.tsx` (alta),
 4. Si `contenido_por_unidad ≠ 1` (el producto se lleva en una unidad que
    agrupa, p.ej. `KIT`), `unidad_contenido_id` es obligatorio
    (`productos_unidad_contenido_chk`).
+5. `codigo_barras` se autogenera **igual a `codigo_interno`** en el mismo
+   trigger (`productos_before_insert()`, `055_productos_codigo_barras_autogenerado.sql`,
+   2026-08-10) — ya no es un campo del formulario de alta ni de ningún
+   `PATCH`; el `GRANT UPDATE` de `productos` no lo incluye, así que ni
+   `super_admin` puede cambiarlo después. Decisión del dueño del proyecto:
+   reusar el código interno (Code128 acepta alfanumérico directo, sin
+   checksum EAN-13) y dejarlo fijo para siempre, para que una etiqueta ya
+   impresa nunca deje de coincidir con el sistema.
 
 ## Estado del producto: nace en `borrador` y nadie puede activarlo (hueco confirmado 2026-08-10)
 
@@ -134,6 +145,8 @@ que no tienen foto muestran un ícono de caja.
 | "Formato no admitido (¿HEIC de iPhone?...)" al subir una foto | `createImageBitmap` no decodifica HEIC fuera de Safari — cambiar la cámara del iPhone a "Más compatible" o convertir a JPG antes de subir |
 | "Para cambiar la imagen principal, marca otra imagen como principal" | El PATCH de imágenes rechaza `es_principal: false` explícito a propósito — despromover sin promover otra dejaría al producto sin principal |
 | El producto se queda en "Borrador" para siempre, ni `super_admin` lo cambia | Hueco confirmado 2026-08-10 — no existe ruta ni botón que escriba `estado`, ver sección arriba |
+| No hay forma de editar el código de barras después del alta | Es intencional desde `055` (2026-08-10) — se autogenera y queda fijo, ni `super_admin` lo cambia |
+| El selector de proveedor en "Nuevo costo" no tiene "+ Agregar proveedor nuevo…" | Tu rol es `finanzas` — puede registrar costos pero no dar de alta un `proveedor_productos` (`GRANT INSERT` restringido a `super_admin`/`direccion`/`compras`) |
 
 ## Costo de catálogo — pantalla (gap de UI cerrado 2026-08-06)
 
@@ -144,3 +157,20 @@ ningún botón que la llamara (`contexto/AUDITORIA_QA_ROLES_2026-08-06.md`
 §4). Carga retroactiva exige `motivo` (`pc_retroactivo_chk`); sólo una
 fila puede quedar sin `vigente_hasta` a la vez
 (`uq_producto_costos_abierto`).
+
+**Proveedor del costo (2026-08-10).** El formulario también pregunta a qué
+proveedor pertenece el costo — liga `producto_costos.proveedor_producto_id`
+(existía en el schema desde `010_inventario_costos.sql`, sin ningún
+selector de UI). Sirve para filtrar costos por proveedor en facturas y
+solicitudes de compra cuando exista el módulo de Compras. El selector
+ofrece los `proveedor_productos` que ya tiene el producto, más
+**"+ Agregar proveedor nuevo…"** — como esa tabla tampoco tenía ninguna
+pantalla propia, ese mini-formulario (`<ProveedorCombobox>` +
+costo del proveedor + unidad en la que cotiza) también sirve de alta
+rápida de un `proveedor_productos`, restringida a
+`super_admin`/`direccion`/`compras` (`finanzas` ve el selector pero no la
+opción de agregar — no tiene `GRANT INSERT` sobre esa tabla). El nombre
+del proveedor en el histórico se resuelve con una consulta aparte
+(`GET /api/productos/[id]/costos`), no con un embed anidado de 3 niveles,
+para que un rol sin `SELECT` en `proveedor_productos` (`almacen`) reciba
+`null` en silencio en vez de que el embed completo falle.
